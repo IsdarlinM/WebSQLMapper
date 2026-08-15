@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>WebSQLMapper</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">AUTHORIZED SECURITY TESTING</p>
+        <h1>Web SQL Injector</h1>
+        <p class="subtitle">SQL injection signal detection with a private-lab blind SQLite mapper.</p>
+      </div>
+      <div class="version">imr :: v0.1.0</div>
+    </header>
+
+    <section class="grid">
+      <form id="scan-form" class="panel">
+        <div class="panel-head"><h2>Target</h2><span class="pill">HTTP</span></div>
+        <label>URL<input id="url" value="http://127.0.0.1:8088/item?id=1" required></label>
+        <div class="two">
+          <label>Method<select id="method"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select></label>
+          <label>Parameter<input id="parameter" value="id" required></label>
+        </div>
+        <div class="two">
+          <label>Original value<input id="original-value" value="1"></label>
+          <label>Body mode<select id="body-mode"><option>auto</option><option>query</option><option>form</option><option>json</option></select></label>
+        </div>
+        <label>Base data (JSON)<textarea id="data" rows="3">{}</textarea></label>
+        <div class="checks">
+          <label class="check"><input id="authorized" type="checkbox"> I have explicit authorization to test this target.</label>
+          <label class="check"><input id="time-probes" type="checkbox"> Enable timing probes (~2 seconds each).</label>
+        </div>
+        <div class="actions">
+          <button type="submit" data-action="scan">Run scan</button>
+          <button type="button" class="secondary" id="map-btn">Map private SQLite lab</button>
+        </div>
+        <p class="notice">Database reconstruction is hard-restricted to localhost/private targets. Public targets can only use the detection scanner.</p>
+      </form>
+
+      <section class="panel results">
+        <div class="panel-head"><h2>Results</h2><span id="state" class="pill muted">idle</span></div>
+        <div id="summary" class="summary">Configure a target and run a scan.</div>
+        <pre id="output">{}</pre>
+      </section>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
