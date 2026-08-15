@@ -10,6 +10,9 @@ function configPayload() {
     parameter: $("parameter").value.trim(),
     original_value: $("original-value").value,
     body_mode: $("body-mode").value,
+    context: $("context").value,
+    baseline_samples: Number($("baseline-samples").value),
+    confirmation_rounds: Number($("confirmation-rounds").value),
     data,
     authorized: $("authorized").checked,
     time_probes: $("time-probes").checked,
@@ -28,7 +31,9 @@ async function run(endpoint) {
     $("output").textContent = JSON.stringify(body, null, 2);
     if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
     if (endpoint === "/api/scan") {
-      $("summary").textContent = body.likely_vulnerable ? `Potential SQLi indicators found: ${body.findings.length}` : `No strong SQLi indicator found in ${body.tested_payloads} probes.`;
+      const dbms = Object.entries(body.dbms_profile || {})[0];
+      const dbmsText = dbms ? ` · DBMS ${dbms[0]} ${dbms[1]}%` : "";
+      $("summary").textContent = `${body.verdict} · confidence ${body.confidence_score}/100 · ${body.tested_payloads} probes${dbmsText}`;
     } else {
       const tables = Object.keys(body.tables || {});
       $("summary").textContent = `Mapped ${tables.length} common table candidate(s) using ${body.requests_sent} local-lab requests.`;

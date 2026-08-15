@@ -35,6 +35,7 @@ class Finding:
     category: str
     title: str
     confidence: str
+    score: int
     payload: str
     evidence: dict[str, Any]
     dbms_hint: str | None = None
@@ -48,11 +49,15 @@ class ScanReport:
     baseline: dict[str, Any]
     findings: list[Finding]
     tested_payloads: int
+    confidence_score: int = 0
+    verdict: str = "no-strong-indicator"
+    detected_context: str | None = None
+    dbms_profile: dict[str, float] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
 
     @property
     def likely_vulnerable(self) -> bool:
-        return any(f.confidence in {"high", "medium"} for f in self.findings)
+        return self.confidence_score >= 55
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)

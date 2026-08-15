@@ -32,7 +32,19 @@ class IntegrationTests(unittest.TestCase):
         config = RequestConfig(url=self.url, method="GET", parameter="id")
         report = SQLiScanner().scan(config, original_value="1", authorized=True)
         self.assertTrue(report.likely_vulnerable)
+        self.assertGreaterEqual(report.confidence_score, 90)
+        self.assertEqual(report.verdict, "confirmed")
+        self.assertEqual(report.detected_context, "numeric")
+        self.assertEqual(report.dbms_profile.get("sqlite"), 100.0)
         self.assertTrue(any(f.category == "boolean-based-indicator" for f in report.findings))
+
+    def test_scanner_ignores_volatile_safe_endpoint(self) -> None:
+        url = f"http://127.0.0.1:{self.server.server_port}/dynamic?id=1"
+        config = RequestConfig(url=url, method="GET", parameter="id")
+        report = SQLiScanner().scan(config, original_value="1", authorized=True)
+        self.assertFalse(report.likely_vulnerable)
+        self.assertLess(report.confidence_score, 55)
+        self.assertGreaterEqual(report.baseline["stability_score"], 90)
 
     def test_mapper_recovers_common_sqlite_values(self) -> None:
         config = RequestConfig(url=self.url, method="GET", parameter="id")

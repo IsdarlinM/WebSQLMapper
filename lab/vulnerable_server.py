@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import sqlite3
+import uuid
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
@@ -26,18 +28,28 @@ class VulnerableHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlsplit(self.path)
-        if parsed.path != "/item":
+        if parsed.path == "/dynamic":
+            # Safe control endpoint with deliberately volatile response values.
+            body = (
+                "OK generated="
+                + datetime.now(timezone.utc).isoformat()
+                + " request_id="
+                + str(uuid.uuid4())
+            )
+            status = 200
+        elif parsed.path == "/item":
+            value = parse_qs(parsed.query, keep_blank_values=True).get("id", ["1"])[0]
+            sql = f"SELECT name FROM items WHERE id = {value}"  # intentionally vulnerable lab code
+            try:
+                rows = self.server.db.execute(sql).fetchall()  # type: ignore[attr-defined]
+                body = ("FOUND: " + rows[0][0]) if rows else "NOT FOUND"
+                status = 200
+            except sqlite3.Error as exc:
+                body = f"sqlite error: {exc}"
+                status = 500
+        else:
             self.send_error(404)
             return
-        value = parse_qs(parsed.query, keep_blank_values=True).get("id", ["1"])[0]
-        sql = f"SELECT name FROM items WHERE id = {value}"  # intentionally vulnerable lab code
-        try:
-            rows = self.server.db.execute(sql).fetchall()  # type: ignore[attr-defined]
-            body = ("FOUND: " + rows[0][0]) if rows else "NOT FOUND"
-            status = 200
-        except sqlite3.Error as exc:
-            body = f"sqlite error: {exc}"
-            status = 500
         raw = body.encode()
         self.send_response(status)
         self.send_header("Content-Type", "text/plain; charset=utf-8")

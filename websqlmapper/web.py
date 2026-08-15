@@ -35,7 +35,7 @@ def _config_from_payload(payload: dict[str, object]) -> RequestConfig:
 
 
 class WebSQLMapperHandler(BaseHTTPRequestHandler):
-    server_version = "WebSQLMapper/0.1"
+    server_version = "WebSQLMapper/0.2"
 
     def log_message(self, fmt: str, *args: object) -> None:
         print(f"[web] {self.address_string()} - {fmt % args}")
@@ -68,6 +68,9 @@ class WebSQLMapperHandler(BaseHTTPRequestHandler):
                     original_value=original_value,
                     authorized=authorized,
                     time_probes=bool(payload.get("time_probes", False)),
+                    context=str(payload.get("context", "auto")),
+                    baseline_samples=int(payload.get("baseline_samples", 5)),
+                    confirmation_rounds=int(payload.get("confirmation_rounds", 3)),
                 )
                 _json_response(self, 200, report.to_dict())
             elif path == "/api/map":

@@ -12,7 +12,7 @@ from .safety import SafetyError
 from .web import run_web
 
 
-BANNER = "Web SQL Injector\nimr :: v0.1.0"
+BANNER = "Web SQL Injector\nimr :: v0.2.0"
 
 
 def _json_object(value: str) -> dict[str, Any]:
@@ -57,13 +57,16 @@ def _config(args: argparse.Namespace) -> RequestConfig:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="websqlmapper", description="Authorized SQL injection detector and lab mapper")
-    parser.add_argument("--version", action="version", version="WebSQLMapper 0.1.0")
+    parser.add_argument("--version", action="version", version="WebSQLMapper 0.2.0")
     sub = parser.add_subparsers(dest="command", required=True)
 
     scan = sub.add_parser("scan", help="Run non-destructive SQL injection probes")
     _add_request_args(scan)
     scan.add_argument("--time-probes", action="store_true", help="Enable optional ~2 second DBMS timing probes")
     scan.add_argument("--dbms", action="append", choices=["mysql", "postgresql", "mssql"], default=[])
+    scan.add_argument("--context", choices=["auto", "numeric", "string"], default="auto", help="Injection context; auto tries the most plausible context first")
+    scan.add_argument("--baseline-samples", type=int, default=5, help="Baseline requests used to model normal response variance (3-9)")
+    scan.add_argument("--confirmation-rounds", type=int, default=3, help="Repeated TRUE/FALSE rounds per boolean probe pair (2-5)")
 
     mapper = sub.add_parser("map", help="Map a SQLite database using boolean inference on private lab targets only")
     _add_request_args(mapper)
@@ -88,6 +91,9 @@ def main(argv: list[str] | None = None) -> int:
                 authorized=args.authorized,
                 time_probes=args.time_probes,
                 dbms=args.dbms or None,
+                context=args.context,
+                baseline_samples=args.baseline_samples,
+                confirmation_rounds=args.confirmation_rounds,
             )
             print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
             return 2 if report.likely_vulnerable else 0

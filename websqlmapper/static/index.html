@@ -14,7 +14,7 @@
         <h1>Web SQL Injector</h1>
         <p class="subtitle">SQL injection signal detection with a private-lab blind SQLite mapper.</p>
       </div>
-      <div class="version">imr :: v0.1.0</div>
+      <div class="version">imr :: v0.2.0</div>
     </header>
 
     <section class="grid">
@@ -28,6 +28,14 @@
         <div class="two">
           <label>Original value<input id="original-value" value="1"></label>
           <label>Body mode<select id="body-mode"><option>auto</option><option>query</option><option>form</option><option>json</option></select></label>
+        </div>
+        <div class="two">
+          <label>SQL context<select id="context"><option>auto</option><option>numeric</option><option>string</option></select></label>
+          <label>Baseline samples<input id="baseline-samples" type="number" min="3" max="9" value="5"></label>
+        </div>
+        <div class="two">
+          <label>Confirmation rounds<input id="confirmation-rounds" type="number" min="2" max="5" value="3"></label>
+          <div></div>
         </div>
         <label>Base data (JSON)<textarea id="data" rows="3">{}</textarea></label>
         <div class="checks">
