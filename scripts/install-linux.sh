@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 PRODUCT="WebSQLMapper"
+MIN_PYTHON="3.10"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 INSTALL_ROOT="${WEBSQLMAPPER_INSTALL_ROOT:-$HOME/.websqlmapper}"
@@ -19,19 +20,25 @@ as_root(){
 }
 
 python_ok(){
-  "$1" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)' >/dev/null 2>&1
+  "$1" ${2:-} -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)' >/dev/null 2>&1
+}
+
+python_mm(){
+  "$1" ${2:-} -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'
 }
 
 find_python(){
   local candidate
-  for candidate in python3.13 python3.12 python3.11 python3 python; do
+  # Prefer the user's/default interpreter first. If it is too old, fall back to
+  # compatible versioned executables already installed on the device.
+  for candidate in python3 python python3.14 python3.13 python3.12 python3.11 python3.10; do
     if have "$candidate" && python_ok "$candidate"; then printf '%s' "$candidate"; return 0; fi
   done
   return 1
 }
 
 install_system_dependencies(){
-  log "Installing required system dependencies (Python >=3.11, venv/pip support, Git)."
+  log "Installing required system dependencies (Python >=$MIN_PYTHON, venv/pip support, Git)."
   if have pkg && printf '%s' "${PREFIX:-}" | grep -qi 'com.termux'; then
     pkg update -y && pkg install -y python git
   elif have apt-get; then
@@ -46,7 +53,7 @@ install_system_dependencies(){
   elif have brew; then
     brew install python git
   else
-    fail "No supported package manager found. Install Python >=3.11 and Git, then rerun this installer."
+    fail "No supported package manager found. Install Python >=$MIN_PYTHON and Git, then rerun this installer."
   fi
 }
 
@@ -55,7 +62,7 @@ if [ -z "$PYTHON" ] || ! have git; then
   install_system_dependencies
   PYTHON="$(find_python || true)"
 fi
-[ -n "$PYTHON" ] || fail "Python >=3.11 is still unavailable after dependency installation."
+[ -n "$PYTHON" ] || fail "Python >=$MIN_PYTHON is still unavailable after dependency installation."
 
 # Some distro packages separate venv from Python. Try once, then install the
 # distro venv package where applicable and retry.
@@ -63,7 +70,9 @@ if ! "$PYTHON" -m venv --help >/dev/null 2>&1; then
   if have apt-get; then as_root apt-get install -y python3-venv; fi
 fi
 
-log "Using $($PYTHON --version 2>&1)."
+SELECTED_MM="$(python_mm "$PYTHON")"
+SELECTED_VERSION="$($PYTHON --version 2>&1)"
+log "Using existing compatible interpreter: $SELECTED_VERSION ($PYTHON)."
 mkdir -p "$INSTALL_ROOT" "$BIN_DIR"
 TMP_SRC="$INSTALL_ROOT/src.new.$$"
 rm -rf "$TMP_SRC"
@@ -76,16 +85,21 @@ rm -rf "$SRC_DIR"
 mv "$TMP_SRC" "$SRC_DIR"
 
 rm -rf "$VENV_DIR"
-"$PYTHON" -m venv "$VENV_DIR" || fail "Failed to create virtual environment at $VENV_DIR"
+"$PYTHON" -m venv "$VENV_DIR" || fail "Failed to create virtual environment with $SELECTED_VERSION at $VENV_DIR"
+VENV_MM="$("$VENV_DIR/bin/python" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+[ "$VENV_MM" = "$SELECTED_MM" ] || fail "Virtual environment Python $VENV_MM does not match selected Python $SELECTED_MM."
+log "Virtual environment uses Python $VENV_MM; dependencies will be installed into this interpreter."
 
 install_source_fallback(){
-  log "Using source-path runtime fallback."
+  log "Using source-path runtime fallback with Python $SELECTED_MM."
   if ! "$VENV_DIR/bin/python" -c 'import requests; parts=tuple(int(x) for x in requests.__version__.split(".")[:2]); raise SystemExit(0 if parts >= (2,32) else 1)' >/dev/null 2>&1; then
     if "$PYTHON" -c 'import requests; parts=tuple(int(x) for x in requests.__version__.split(".")[:2]); raise SystemExit(0 if parts >= (2,32) else 1)' >/dev/null 2>&1; then
       rm -rf "$VENV_DIR"
       "$PYTHON" -m venv --system-site-packages "$VENV_DIR" || fail "Failed to create system-site fallback virtual environment."
+      VENV_MM="$("$VENV_DIR/bin/python" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+      [ "$VENV_MM" = "$SELECTED_MM" ] || fail "Fallback virtual environment Python $VENV_MM does not match selected Python $SELECTED_MM."
     else
-      "$VENV_DIR/bin/python" -m pip install 'requests>=2.32,<3' || fail "Could not install the required requests dependency and no compatible system copy is available."
+      "$VENV_DIR/bin/python" -m pip install 'requests>=2.32,<3' || fail "Could not install the required requests dependency for Python $SELECTED_MM and no compatible system copy is available."
     fi
   fi
   SITE_DIR="$("$VENV_DIR/bin/python" -c 'import site; print(site.getsitepackages()[0])')"
@@ -106,10 +120,10 @@ else
   fi
 fi
 
-cat > "$WRAPPER" <<EOF
+cat > "$WRAPPER" <<EOF2
 #!/usr/bin/env sh
 exec "$VENV_DIR/bin/python" -m websqlmapper "\$@"
-EOF
+EOF2
 chmod +x "$WRAPPER"
 
 append_env(){
@@ -135,7 +149,9 @@ fi
 export WEBSQLMAPPER_HOME="$INSTALL_ROOT"
 export PATH="$BIN_DIR:$PATH"
 "$WRAPPER" --version >/dev/null || fail "Installed command failed its version check."
-log "Installation verified."
+INSTALLED_MM="$("$VENV_DIR/bin/python" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+log "Installation verified with Python $INSTALLED_MM."
+log "All Python dependencies are installed in: $VENV_DIR"
 log "Command: websqlmapper"
 log "Home: $INSTALL_ROOT"
 log "PATH entry: $BIN_DIR"

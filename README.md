@@ -1,6 +1,6 @@
 # Web SQL Injector / WebSQLMapper
 
-**WebSQLMapper** is a Python 3.11+ toolkit for **authorized SQL injection validation**. Version 0.3.0 adds a professional request engine around the adaptive detector introduced in 0.2.0: raw HTTP/cURL import, nested request injection points, sessions, proxies, request budgets, evidence timelines, reports, templates, live web jobs, installers, and CI.
+**WebSQLMapper** is a Python 3.10+ toolkit for **authorized SQL injection validation**. Version 0.3.x adds a professional request engine around the adaptive detector introduced in 0.2.0: raw HTTP/cURL import, nested request injection points, sessions, proxies, request budgets, evidence timelines, reports, templates, live web jobs, installers, and CI.
 
 ```text
 ──────────────────────────────────────────────────
@@ -15,7 +15,7 @@ Use WebSQLMapper only on systems you own or are explicitly authorized to test. A
 
 The detector uses curated, high-signal probe families rather than pretending that a finite payload list can represent every SQL injection context. It correlates syntax/error behavior, repeatable TRUE/FALSE response separation, endpoint stability, and optional timing evidence.
 
-## 0.3.0 highlights
+## 0.3.x highlights
 
 ### Professional Request Engine
 
@@ -67,7 +67,7 @@ cd WebSQLMapper
 bash scripts/install-linux.sh
 ```
 
-The installer checks for Python >=3.11, pip/venv support and Git. When required it attempts installation through the detected package manager (`apt`, `dnf`, `pacman`, `apk`, Termux `pkg`, or Homebrew), creates an isolated virtual environment, installs WebSQLMapper and optional SOCKS support, creates the `websqlmapper` command, and appends `WEBSQLMAPPER_HOME` plus the command directory to the user's shell environment.
+The installer checks for Python >=3.10, pip/venv support and Git. When required it attempts installation through the detected package manager (`apt`, `dnf`, `pacman`, `apk`, Termux `pkg`, or Homebrew), creates an isolated virtual environment, installs WebSQLMapper and optional SOCKS support, creates the `websqlmapper` command, and appends `WEBSQLMAPPER_HOME` plus the command directory to the user's shell environment. If the device already has a compatible Python (3.10 or newer), that interpreter is reused and the venv plus every Python dependency are created/installed with the same major/minor version. A new Python is installed only when no compatible interpreter is available.
 
 ### Windows
 
@@ -77,7 +77,7 @@ Open **Command Prompt** in the repository and run:
 scripts\install.cmd
 ```
 
-The installer checks for Python >=3.11 and Git. If Python is unavailable it attempts installation with `winget`; Git is also installed with `winget` when possible. The installer creates an isolated venv under `%LOCALAPPDATA%\WebSQLMapper`, creates `websqlmapper.cmd`, sets `WEBSQLMAPPER_HOME`, and appends the command directory to the user `PATH`.
+The installer checks for an existing Python >=3.10 and prefers the current `python`/`python3` interpreter when compatible. If no compatible Python exists it attempts installation with `winget`; Git is also installed with `winget` when possible. The isolated venv is created with the selected interpreter, all dependencies are installed into that exact Python major/minor version, and the installer verifies that the venv version matches before continuing. It then creates `websqlmapper.cmd`, sets `WEBSQLMAPPER_HOME`, and appends the command directory to the user `PATH`.
 
 Open a new terminal after installation so persisted environment variables are reloaded.
 
@@ -353,7 +353,7 @@ bash scripts/test-install-linux.sh
 
 The automated test surface covers response analysis, request parsing, each injection location, retries/redirects/timeouts, SQLi detection, false-positive controls, request budgets, mapper behavior, reports/templates, CLI error boundaries, web API/job controls and installer structure.
 
-GitHub Actions runs the unit/integration suite across Python 3.11, 3.12 and 3.13 on Linux and Windows. A separate workflow executes both Linux and native Windows installer smoke tests.
+GitHub Actions runs the unit/integration suite across Python 3.10, 3.11, 3.12, 3.13 and 3.14 on Linux and Windows. A separate workflow executes both Linux and native Windows installer smoke tests.
 
 ### Windows installer Docker smoke
 

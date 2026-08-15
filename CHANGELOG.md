@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased - Python 3.10 compatibility
+
+- Lowered the minimum supported runtime from Python 3.11 to Python 3.10 (`Requires-Python >=3.10`).
+- Linux and Windows installers now prefer an already-installed compatible Python before considering a new Python installation.
+- Installer-created virtual environments are verified to use the same Python major/minor version selected from the device.
+- Runtime dependencies are installed into that selected interpreter's venv, with controlled failures when dependency installation is impossible.
+- Added Python 3.10 and 3.14 to compatibility metadata/CI coverage, keeping no upper Python bound.
+- Windows installer discovers Python 3.10 through 3.14 local installs and falls back to a winget-provided compatible interpreter only when needed.
+
 ## 0.3.0 - 2026-08-15
 
 ### Added

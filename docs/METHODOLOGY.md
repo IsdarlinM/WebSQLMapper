@@ -24,7 +24,7 @@ A single changed HTTP response is not treated as proof of SQL injection.
 
 ## Request model
 
-Version 0.3.0 separates the request representation from the detector. A request can originate from CLI fields, a raw HTTP message, a cURL command or a saved redacted template.
+Version 0.3.x separates the request representation from the detector. A request can originate from CLI fields, a raw HTTP message, a cURL command or a saved redacted template.
 
 Supported injection locations include:
 
@@ -183,3 +183,7 @@ Public Internet databases are not automatically reconstructed.
 ## Defensive guidance
 
 The remediation target is the server-side query construction. OWASP recommends prepared statements/parameterized queries, strict allow-listing for dynamic identifiers that cannot be bound, and least-privilege database accounts. Input validation is useful defense-in-depth but is not a substitute for safe query parameterization.
+
+## Python compatibility policy
+
+WebSQLMapper declares `Requires-Python >=3.10` and intentionally has no upper Python bound. The compatibility floor is validated against Python 3.10 grammar and CI is configured for Python 3.10, 3.11, 3.12, 3.13 and 3.14. Installers reuse an already-installed compatible interpreter when possible and create the project virtual environment with that same Python major/minor version, so runtime dependencies are resolved for the interpreter that will actually execute WebSQLMapper.

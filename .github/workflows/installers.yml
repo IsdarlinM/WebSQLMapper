@@ -5,25 +5,41 @@ on:
   pull_request:
 jobs:
   linux-installer:
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.14']
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Confirm selected Python
+        run: python3 --version
       - name: Offline/source-path fallback smoke
         run: bash scripts/test-install-linux.sh
       - name: Normal online dependency/install smoke
         run: bash scripts/test-install-linux-online.sh
   windows-installer:
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.14']
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
-      - name: Run CMD installer in isolated temp root
+          python-version: ${{ matrix.python }}
+      - name: Run CMD installer using the already-installed Python
         shell: cmd
         run: |
+          for /f "delims=" %%V in ('python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"') do set EXPECTED_MM=%%V
           set WEBSQLMAPPER_INSTALL_ROOT=%RUNNER_TEMP%\WebSQLMapper
           set WEBSQLMAPPER_SKIP_PATH=1
           call scripts\install.cmd
+          for /f "delims=" %%V in ('%RUNNER_TEMP%\WebSQLMapper\venv\Scripts\python.exe -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"') do set ACTUAL_MM=%%V
+          if not "%ACTUAL_MM%"=="%EXPECTED_MM%" exit /b 1
           %RUNNER_TEMP%\WebSQLMapper\bin\websqlmapper.cmd --version
           %RUNNER_TEMP%\WebSQLMapper\bin\websqlmapper.cmd --color never doctor

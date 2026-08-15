@@ -7,15 +7,17 @@ name = "websqlmapper"
 version = "0.3.0"
 description = "Adaptive authorized SQL injection detection with a professional request engine and private-lab SQLite mapping."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [{name = "imr"}]
 keywords = ["security", "sql-injection", "sqli", "testing", "sqlite"]
 classifiers = [
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Security",
 ]
 dependencies = ["requests>=2.32,<3"]

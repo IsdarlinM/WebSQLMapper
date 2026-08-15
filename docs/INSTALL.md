@@ -6,7 +6,7 @@ This document describes the v0.3.0 installers and their failure behavior.
 
 WebSQLMapper requires:
 
-- Python 3.11 or newer;
+- Python 3.10 or newer;
 - `requests` 2.32 or newer and lower than 3.0;
 - Git for the `websqlmapper update` command.
 
@@ -22,11 +22,12 @@ bash scripts/install-linux.sh
 
 The script:
 
-1. looks for Python 3.11+;
+1. looks for an already-installed Python 3.10+ and prefers the current/default interpreter when compatible;
 2. installs Python, pip/venv support and Git if they are missing and a supported package manager is available;
 3. copies the project into `~/.websqlmapper/src`;
 4. creates `~/.websqlmapper/venv`;
 5. installs packaging tools and `websqlmapper[socks]`, falling back to core HTTP/HTTPS dependencies if optional SOCKS installation fails;
+   All Python packages are installed inside the venv created by the selected Python major/minor version; the installer aborts if the venv version differs from the selected interpreter.
 6. creates `~/.local/bin/websqlmapper`;
 7. appends a `WebSQLMapper environment` block to the applicable user shell files;
 8. exports `WEBSQLMAPPER_HOME` and prepends the command directory to `PATH` for the current installer process;
@@ -46,12 +47,12 @@ scripts\install.cmd
 
 The script does not use PowerShell. It:
 
-1. looks for Python 3.11+ through the Python launcher or `python`;
-2. if Python is missing, attempts `winget install Python.Python.3.13`;
+1. looks for an already-installed Python 3.10+ and prefers the current/default interpreter when compatible through the Python launcher or `python`;
+2. if no compatible Python exists, attempts Python 3.13 with `winget` and falls back to the minimum supported Python 3.10 package;
 3. if Git is missing and winget is available, attempts `winget install Git.Git`;
 4. copies the project to `%LOCALAPPDATA%\WebSQLMapper\src`;
 5. creates an isolated venv;
-6. installs dependencies, attempting optional SOCKS support first;
+6. installs dependencies, attempting optional SOCKS support first; the installer verifies the venv uses the exact selected Python major/minor version before installing packages;
 7. creates `%LOCALAPPDATA%\WebSQLMapper\bin\websqlmapper.cmd`;
 8. persists `WEBSQLMAPPER_HOME` and appends the command directory to `HKCU\Environment\Path`;
 9. verifies the command before success is printed.
