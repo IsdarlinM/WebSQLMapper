@@ -1,146 +1,185 @@
-# WebSQLMapper detection methodology
+# WebSQLMapper v0.3.0 methodology
 
-WebSQLMapper is designed for **authorized security validation**. Public targets may use the detection scanner only. Automated database reconstruction remains restricted in code to localhost/private lab addresses.
+WebSQLMapper is an **authorized SQL injection validation tool**. It is designed to distinguish SQL-controlled behavior from normal application/network variation and to preserve reproducible evidence for analyst review.
 
-## v0.2.0 detection pipeline
+Automated database reconstruction is a separate capability and remains restricted in code to localhost/private training targets.
 
-The scanner now follows this sequence:
+## Detection pipeline
 
-1. Validate the URL and explicit authorization acknowledgement.
-2. Collect 3-9 baseline responses (five by default).
-3. Normalize common volatile response values.
-4. Measure endpoint-specific content, length, and latency variance.
-5. Run minimal syntax/error probes.
-6. Run context-aware TRUE/FALSE boolean probe pairs in repeated alternating rounds.
-7. Measure within-TRUE consistency, within-FALSE consistency, and cross-cluster separation.
-8. Optionally run repeated DBMS timing probes interleaved with control requests.
-9. Correlate finding evidence into a 0-100 confidence score and DBMS profile.
-10. Return evidence for analyst review rather than treating a single changed response as proof.
+A normal scan follows this high-level sequence:
+
+1. require explicit authorization acknowledgement;
+2. validate URL, HTTP method, injection point and deterministic transport settings;
+3. establish a multi-sample baseline;
+4. normalize conservative volatile response values;
+5. calculate endpoint-specific stability and differential thresholds;
+6. send minimal syntax/error probes;
+7. test context-appropriate TRUE/FALSE probe pairs in repeated alternating rounds;
+8. correlate content clusters, status, length and baseline affinity;
+9. optionally execute repeated DBMS-aware timing probe/control pairs;
+10. produce finding confidence, overall verdict, reproducibility and DBMS profile;
+11. preserve redacted evidence/timeline data for manual review.
+
+A single changed HTTP response is not treated as proof of SQL injection.
+
+## Request model
+
+Version 0.3.0 separates the request representation from the detector. A request can originate from CLI fields, a raw HTTP message, a cURL command or a saved redacted template.
+
+Supported injection locations include:
+
+- query parameters, including an indexed repeated occurrence such as `id[1]`;
+- URL-encoded form fields;
+- nested JSON and GraphQL variable paths such as `user.items[0].id`;
+- structured multipart fields;
+- cookies;
+- explicitly selected request headers;
+- 1-based URL path segments;
+- raw/XML body templates containing `{{INJECT}}`.
+
+The transport uses a persistent Requests `Session`, so ordinary response cookies/session state are retained between scan requests. Basic and Bearer authentication, proxies, CA bundles, redirects, timeout/retry controls and pacing are represented explicitly in `RequestConfig`.
+
+Deterministic configuration mistakes are rejected in a preflight step. Per-request network failures are represented as response snapshots with status `0` and an error message; they do not become SQLi evidence.
 
 ## Adaptive baseline
 
-A single HTTP response is not a reliable reference for modern applications. Pages frequently include timestamps, request IDs, CSRF-like tokens, trace identifiers, and other values unrelated to the tested parameter.
+Modern responses frequently contain timestamps, trace IDs, nonces and other values unrelated to the tested parameter. WebSQLMapper collects multiple baseline responses and records:
 
-WebSQLMapper therefore collects multiple baseline responses and records:
+- median byte length;
+- median absolute deviation (MAD) of length;
+- median elapsed time and timing MAD;
+- median/minimum pairwise normalized-body similarity;
+- a stability score;
+- an endpoint-specific differential margin.
 
-- median response byte length;
-- median absolute deviation (MAD) of response length;
-- median elapsed time;
-- MAD of elapsed time;
-- median pairwise normalized-body similarity;
-- minimum pairwise similarity;
-- a 0-100 stability score;
-- an endpoint-specific minimum differential margin.
-
-The median is used instead of the arithmetic mean for baseline center estimates because it is less affected by outliers. This behavior is documented by Python's `statistics` module.
+The median is intentionally used as a robust center estimate in the presence of outliers.
 
 ## Conservative response normalization
 
-Before text comparison, the analyzer masks common volatile shapes:
+The normalizer masks narrowly recognized volatile shapes such as:
 
-- UUID values;
+- UUIDs;
 - ISO-like date/time values;
 - plausible epoch timestamps;
-- long hexadecimal identifiers/tokens;
-- values attached to common nonce/request/trace/correlation identifiers.
+- long hexadecimal identifiers;
+- values associated with common request/trace/correlation identifiers.
 
-The normalizer intentionally does **not** delete arbitrary numbers or application text. Over-normalization can hide a real SQL-controlled response difference.
+It does not remove arbitrary application numbers or text because excessive normalization can hide genuine SQL-controlled differences.
 
-Normalized bodies are compared using a symmetric average of Python `difflib.SequenceMatcher` ratios with `autojunk=False`. Python documents that SequenceMatcher's automatic junk heuristic may be asymmetric on some inputs; symmetric comparison makes detector behavior more predictable.
+Bodies are compared using a symmetric average of `difflib.SequenceMatcher` ratios with `autojunk=False`.
 
 ## Boolean differential confirmation
 
-Boolean SQL injection is evaluated as two repeated response clusters, not one TRUE request and one FALSE request.
+TRUE and FALSE conditions are evaluated as repeated clusters. Depending on the scan profile, multiple alternating rounds are executed to reduce ordering/network bias.
 
-For every selected probe pair, the default scanner sends three TRUE/FALSE rounds and alternates which condition is requested first. The analyzer then measures:
+Evidence includes:
 
-- consistency among TRUE responses;
-- consistency among FALSE responses;
-- similarity between the two clusters;
-- affinity of each cluster with the baseline;
-- status-code separation;
-- median byte-length separation;
-- the number of rounds that independently confirm a difference.
+- within-TRUE consistency;
+- within-FALSE consistency;
+- cross-cluster similarity;
+- affinity with the baseline;
+- repeatable status separation;
+- median response-length separation;
+- number and percentage of independently confirming rounds.
 
-A content difference must exceed the endpoint's observed baseline variability before it contributes strong evidence.
+A network/configuration failure in either cluster prevents that pair from receiving a positive boolean score.
 
-## Confidence scoring
+## Confidence and reproducibility
 
-Findings use a 0-100 confidence scale.
+Confidence and reproducibility are deliberately separate.
 
-| Score | Finding confidence | Scan interpretation |
-| --- | --- | --- |
-| 0-34 | noise | no strong indicator |
-| 35-54 | low | possible |
-| 55-74 | medium | probable |
-| 75-89 | high | high-confidence |
-| 90-100 | confirmed | confirmed by repeated detector evidence |
+Confidence asks: **how strongly does the correlated evidence support SQL-controlled behavior?**
 
-Boolean scoring rewards repeated rounds, cluster separation, stable baselines, reproducible status differences, and meaningful byte-length separation. Error-based scoring rewards newly introduced DBMS-specific error signatures. Timing scoring requires repeated delay/control separation.
+Reproducibility asks: **how consistently did repeated confirmation rounds reproduce the differential?**
 
-The word `confirmed` describes confirmation by WebSQLMapper's differential model. An analyst should still validate scope, application logic, and reproducibility before submitting a security report.
+Overall verdicts are:
 
-## DBMS profiling
+| Score | Verdict |
+| ---: | --- |
+| 0-34 | `no-strong-indicator` |
+| 35-54 | `possible` |
+| 55-74 | `probable` |
+| 75-89 | `high-confidence` |
+| 90-100 | `confirmed` |
 
-The DBMS profile is evidence-weighted rather than guessed from a single header. Current evidence comes from:
-
-- newly introduced DBMS error signatures;
-- successful optional DBMS-specific timing probes.
-
-The profile currently recognizes MySQL/MariaDB, PostgreSQL, SQLite, Microsoft SQL Server, and Oracle-style error patterns. A profile is omitted when the scan has no DBMS-specific evidence.
+`confirmed` means confirmed by WebSQLMapper's differential model; scope and business/security impact still require analyst validation.
 
 ## Timing model
 
-Timing tests are opt-in. A single slow request is not enough because network and application latency naturally vary.
+Timing tests are profile/option controlled because Internet latency is noisy. A single slow response is insufficient.
 
-For each selected DBMS timing probe, WebSQLMapper performs three probe/control pairs and alternates ordering. It compares each probe directly with its adjacent control and requires at least two confirming rounds. The minimum delay threshold is also increased when the baseline has measurable latency MAD.
+Timing detection uses repeated adjacent probe/control pairs and compares their deltas with measured baseline timing variation. When early evidence strongly identifies a supported DBMS, the scheduler prioritizes that DBMS's timing probe rather than indiscriminately sending every timing syntax.
 
-## Context selection
+## DBMS profile
 
-`--context auto` orders probe contexts from most plausible to least plausible:
+The DBMS profile is evidence-weighted. Current evidence sources include newly introduced database error signatures and successful DBMS-specific timing behavior.
 
-- numeric-looking original values: numeric, then string;
-- other values: string, then numeric.
+Recognized error families include MySQL/MariaDB, PostgreSQL, SQLite, Microsoft SQL Server and Oracle-style errors. Timing probes currently cover MySQL, PostgreSQL and SQL Server.
 
-Users can force `--context numeric` or `--context string` when the SQL context is already known.
+## Context profile
 
-## Lab-only SQLite mapper
+The scanner orders numeric/string probe contexts from the original value and records higher-level hints for likely numeric, quoted-string, ORDER BY, or LIMIT/OFFSET-style parameter roles. These are scheduling/analyst hints rather than a claim to parse the server-side SQL statement.
 
-The mapper is deliberately separate from public-target detection. It:
+## Request budgets and cancellation
 
-- rejects public targets before mapping;
-- calibrates a boolean oracle;
-- checks a bounded common table dictionary against `sqlite_master`;
-- checks bounded common column names through `pragma_table_info`;
+Every profile has a default hard request budget and users can provide a bounded custom budget. The scan controller checks budget/cancel/pause state between requests. Reaching the budget or receiving cancellation stops cleanly and is recorded in the report.
+
+## Evidence handling
+
+Timelines contain method, redacted URL/headers/body excerpts, status, length, elapsed time, phase and labels. Common authorization/cookie/API-key headers and password/token-like body fields are redacted before report storage.
+
+Finding evidence may contain bounded normalized response diffs for baseline/error or TRUE/FALSE comparison.
+
+Scans are ephemeral by default; persistence requires explicit `--save` or a user report action.
+
+## Web API robustness
+
+The local API imposes a 2 MB request-body limit, validates JSON root/type expectations, returns structured 4xx errors for deterministic user input problems, and keeps a generic 500 boundary only as a last-resort server protection. SSE disconnects and ordinary connection resets are handled without intentionally propagating tracebacks to the user interface.
+
+## Private-lab SQLite mapper
+
+The mapper:
+
+- rejects public targets before inference;
+- validates request configuration before calibration;
+- calibrates a TRUE/FALSE boolean oracle;
+- stops on oracle/network failure instead of comparing empty responses;
+- checks bounded common table names through `sqlite_master`;
+- checks bounded column names through `pragma_table_info`;
 - infers bounded row counts;
-- reconstructs selected cell values character-by-character using SQLite `length`, `substr`, and `unicode` operations.
+- reconstructs selected values character-by-character using SQLite `length`, `substr`, and `unicode` functions.
 
-The public scanner does not automatically reconstruct remote Internet databases.
+Public Internet databases are not automatically reconstructed.
 
-## Reference sources
+## Primary references
 
-Security/testing methodology:
+### SQL injection security/testing
 
 - OWASP SQL Injection Prevention Cheat Sheet: https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html
 - OWASP Query Parameterization Cheat Sheet: https://cheatsheetseries.owasp.org/cheatsheets/Query_Parameterization_Cheat_Sheet.html
 - PortSwigger Web Security Academy — SQL injection: https://portswigger.net/web-security/sql-injection
 - PortSwigger SQL injection cheat sheet: https://portswigger.net/web-security/sql-injection/cheat-sheet
 - PortSwigger blind SQL injection: https://portswigger.net/web-security/sql-injection/blind
+- CWE-89: https://cwe.mitre.org/data/definitions/89.html
 
-Database references:
+### Database behavior
 
 - SQLite PRAGMA documentation: https://sqlite.org/pragma.html
-- SQLite core SQL functions: https://sqlite.org/lang_corefunc.html
+- SQLite core functions: https://sqlite.org/lang_corefunc.html
 
-Python implementation references:
+### Python and packaging
 
-- Python `statistics`: https://docs.python.org/3/library/statistics.html
-- Python `difflib`: https://docs.python.org/3/library/difflib.html
-- Python `re`: https://docs.python.org/3/library/re.html
-- Python `urllib.parse`: https://docs.python.org/3/library/urllib.parse.html
 - Python `argparse`: https://docs.python.org/3/library/argparse.html
+- Python `difflib`: https://docs.python.org/3/library/difflib.html
+- Python `statistics`: https://docs.python.org/3/library/statistics.html
 - Python `unittest`: https://docs.python.org/3/library/unittest.html
+- Python virtual environments: https://docs.python.org/3/library/venv.html
+- Python Packaging User Guide: https://packaging.python.org/
+
+### HTTP runtime
+
+- Requests advanced usage (sessions, proxies, TLS): https://requests.readthedocs.io/en/stable/user/advanced/
 
 ## Defensive guidance
 
-OWASP's primary recommendation is to stop constructing SQL with untrusted input through string concatenation and use prepared statements / parameterized queries. Where identifiers cannot be bound as parameters, use strict allow-lists. Apply least privilege to application database accounts so a successful injection has the smallest possible impact.
+The remediation target is the server-side query construction. OWASP recommends prepared statements/parameterized queries, strict allow-listing for dynamic identifiers that cannot be bound, and least-privilege database accounts. Input validation is useful defense-in-depth but is not a substitute for safe query parameterization.

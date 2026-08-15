@@ -74,7 +74,10 @@ class SQLiteBlindMapper:
         payload = original_value + self._payload(condition, context)
         response = self.client.request(config, payload)
         self._requests += 1
-        assert self._true_ref is not None and self._false_ref is not None
+        if response.status == 0:
+            raise RuntimeError(f"boolean inference request failed: {response.error or 'network/configuration error'}")
+        if self._true_ref is None or self._false_ref is None:
+            raise RuntimeError("boolean oracle is not calibrated")
         true_score = _similarity(response.body, self._true_ref.body)
         false_score = _similarity(response.body, self._false_ref.body)
         if response.status == self._true_ref.status != self._false_ref.status:
@@ -87,6 +90,9 @@ class SQLiteBlindMapper:
         self._true_ref = self.client.request(config, original_value + self._payload("1=1", context))
         self._false_ref = self.client.request(config, original_value + self._payload("1=0", context))
         self._requests += 2
+        failures = [x.error for x in (self._true_ref, self._false_ref) if x.status == 0]
+        if failures:
+            raise RuntimeError(f"boolean oracle calibration request failed: {failures[0] or 'network/configuration error'}")
         sim = _similarity(self._true_ref.body, self._false_ref.body)
         if self._true_ref.status == self._false_ref.status and sim > 0.985:
             raise RuntimeError(
@@ -150,6 +156,7 @@ class SQLiteBlindMapper:
     ) -> MappingResult:
         require_authorization(authorized)
         require_private_mapping_target(config.url)
+        self.client.validate_config(config, original_value)
         if max_rows < 1 or max_rows > 20:
             raise ValueError("max_rows must be between 1 and 20")
         if max_chars < 1 or max_chars > 256:

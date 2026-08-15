@@ -1,0 +1,10 @@
+# escape=`
+FROM python:3.13-windowsservercore-ltsc2022
+SHELL ["cmd", "/S", "/C"]
+WORKDIR C:\src
+COPY . .
+ENV WEBSQLMAPPER_INSTALL_ROOT=C:\WebSQLMapperTest
+ENV WEBSQLMAPPER_SKIP_PATH=1
+RUN scripts\install.cmd
+RUN C:\WebSQLMapperTest\bin\websqlmapper.cmd --version
+RUN C:\WebSQLMapperTest\bin\websqlmapper.cmd --color never doctor

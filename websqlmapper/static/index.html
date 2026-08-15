@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>WebSQLMapper</title>
+  <meta name="color-scheme" content="dark">
+  <title>WebSQLMapper · Web SQL Injector</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -12,47 +13,128 @@
       <div>
         <p class="eyebrow">AUTHORIZED SECURITY TESTING</p>
         <h1>Web SQL Injector</h1>
-        <p class="subtitle">SQL injection signal detection with a private-lab blind SQLite mapper.</p>
+        <p class="subtitle">Adaptive SQL injection verification with reproducible evidence and a private-lab SQLite mapper.</p>
       </div>
-      <div class="version">imr :: v0.2.0</div>
+      <div class="version">imr :: v0.3.0</div>
     </header>
 
-    <section class="grid">
-      <form id="scan-form" class="panel">
-        <div class="panel-head"><h2>Target</h2><span class="pill">HTTP</span></div>
+    <section class="workspace">
+      <aside class="panel config-panel">
+        <div class="panel-head"><h2>Request</h2><span class="pill">v0.3 engine</span></div>
+
+        <details class="importer" open>
+          <summary>Import raw HTTP / cURL</summary>
+          <div class="two compact">
+            <label>Format<select id="import-kind"><option value="raw">Raw HTTP</option><option value="curl">cURL</option></select></label>
+            <label>Raw scheme<select id="import-scheme"><option>https</option><option>http</option></select></label>
+          </div>
+          <label>Captured request<textarea id="import-text" rows="6" placeholder="POST /api/user HTTP/1.1&#10;Host: example.test&#10;Content-Type: application/json&#10;&#10;{&quot;user&quot;:{&quot;id&quot;:&quot;1&quot;}}"></textarea></label>
+          <button type="button" class="secondary wide" id="parse-btn">Parse into request editor</button>
+        </details>
+
         <label>URL<input id="url" value="http://127.0.0.1:8088/item?id=1" required></label>
         <div class="two">
-          <label>Method<select id="method"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select></label>
-          <label>Parameter<input id="parameter" value="id" required></label>
+          <label>Method<select id="method"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>HEAD</option><option>OPTIONS</option></select></label>
+          <label>Body mode<select id="body-mode"><option>auto</option><option>query</option><option>form</option><option>json</option><option>graphql</option><option>multipart</option><option>raw</option><option>xml</option></select></label>
+        </div>
+
+        <div class="two">
+          <label>Injection location<select id="location"><option>query</option><option>form</option><option>json</option><option>graphql</option><option>cookie</option><option>header</option><option>path</option><option>raw</option></select></label>
+          <label>Parameter / path<input id="parameter" value="id" placeholder="id · user.profile.id · 2"></label>
         </div>
         <div class="two">
           <label>Original value<input id="original-value" value="1"></label>
-          <label>Body mode<select id="body-mode"><option>auto</option><option>query</option><option>form</option><option>json</option></select></label>
-        </div>
-        <div class="two">
           <label>SQL context<select id="context"><option>auto</option><option>numeric</option><option>string</option></select></label>
-          <label>Baseline samples<input id="baseline-samples" type="number" min="3" max="9" value="5"></label>
         </div>
+
+        <label>Data (JSON object/array)<textarea id="data" rows="4">{}</textarea></label>
+        <label>Raw / XML body <span class="hint">use {{INJECT}}</span><textarea id="raw-body" rows="3" placeholder="&lt;id&gt;{{INJECT}}&lt;/id&gt;"></textarea></label>
         <div class="two">
-          <label>Confirmation rounds<input id="confirmation-rounds" type="number" min="2" max="5" value="3"></label>
-          <div></div>
+          <label>Headers (JSON)<textarea id="headers" rows="3">{}</textarea></label>
+          <label>Cookies (JSON)<textarea id="cookies" rows="3">{}</textarea></label>
         </div>
-        <label>Base data (JSON)<textarea id="data" rows="3">{}</textarea></label>
+
+        <details>
+          <summary>Transport & authentication</summary>
+          <label>Proxy<input id="proxy" placeholder="http://127.0.0.1:8080 or socks5h://127.0.0.1:9050"></label>
+          <label>Custom CA bundle<input id="ca-bundle" placeholder="/path/to/ca.pem"></label>
+          <div class="two">
+            <label>Basic user<input id="auth-user"></label>
+            <label>Basic password<input id="auth-pass" type="password"></label>
+          </div>
+          <label>Bearer token<input id="bearer" type="password"></label>
+          <div class="three">
+            <label>Timeout<input id="timeout" type="number" min="0.1" max="120" step="0.1" value="8"></label>
+            <label>Retries<input id="retries" type="number" min="0" max="5" value="1"></label>
+            <label>Rate / sec<input id="rate" type="number" min="0" max="100" step="0.1" value="0"></label>
+          </div>
+          <div class="two">
+            <label>Delay ms<input id="delay-ms" type="number" min="0" max="60000" value="0"></label>
+            <label>Jitter ms<input id="jitter-ms" type="number" min="0" max="60000" value="0"></label>
+          </div>
+          <div class="checks inline">
+            <label class="check"><input id="verify-tls" type="checkbox" checked> Verify TLS</label>
+            <label class="check"><input id="follow-redirects" type="checkbox"> Follow redirects</label>
+          </div>
+        </details>
+
+        <details open>
+          <summary>Scan strategy</summary>
+          <div class="three">
+            <label>Profile<select id="profile"><option>safe</option><option selected>normal</option><option>thorough</option></select></label>
+            <label>Baseline<input id="baseline-samples" type="number" min="3" max="9" placeholder="profile"></label>
+            <label>Confirm rounds<input id="confirmation-rounds" type="number" min="2" max="5" placeholder="profile"></label>
+          </div>
+          <div class="two">
+            <label>Request budget<input id="max-requests" type="number" min="10" max="2000" placeholder="profile default"></label>
+            <label>Timing<select id="time-probes"><option value="auto">Profile default</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+          </div>
+        </details>
+
         <div class="checks">
           <label class="check"><input id="authorized" type="checkbox"> I have explicit authorization to test this target.</label>
-          <label class="check"><input id="time-probes" type="checkbox"> Enable timing probes (~2 seconds each).</label>
         </div>
-        <div class="actions">
-          <button type="submit" data-action="scan">Run scan</button>
+        <div class="actions primary-actions">
+          <button type="button" id="scan-btn">Run adaptive scan</button>
+          <button type="button" class="secondary" id="pause-btn" disabled>Pause</button>
+          <button type="button" class="secondary" id="resume-btn" disabled>Resume</button>
+          <button type="button" class="danger" id="stop-btn" disabled>Stop</button>
           <button type="button" class="secondary" id="map-btn">Map private SQLite lab</button>
         </div>
-        <p class="notice">Database reconstruction is hard-restricted to localhost/private targets. Public targets can only use the detection scanner.</p>
-      </form>
+        <p class="notice">Database reconstruction remains hard-restricted to localhost/private targets. Saved secrets are never required for normal reports; request evidence redacts sensitive headers.</p>
+      </aside>
 
-      <section class="panel results">
-        <div class="panel-head"><h2>Results</h2><span id="state" class="pill muted">idle</span></div>
-        <div id="summary" class="summary">Configure a target and run a scan.</div>
-        <pre id="output">{}</pre>
+      <section class="results-column">
+        <section class="panel status-panel">
+          <div class="panel-head"><h2>Scan state</h2><span id="state" class="pill muted">idle</span></div>
+          <div class="progress-track"><div id="progress" class="progress-bar"></div></div>
+          <div class="metrics">
+            <div><span>Confidence</span><strong id="metric-confidence">—</strong></div>
+            <div><span>Reproducibility</span><strong id="metric-repro">—</strong></div>
+            <div><span>DBMS</span><strong id="metric-dbms">—</strong></div>
+            <div><span>Requests</span><strong id="metric-requests">0</strong></div>
+          </div>
+          <div id="summary" class="summary">Configure a target and run a scan.</div>
+          <div id="phases" class="phases"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head"><h2>Findings</h2><span id="finding-count" class="pill muted">0</span></div>
+          <div id="findings" class="finding-list empty">No findings yet.</div>
+        </section>
+
+        <section class="panel inspector-panel">
+          <div class="panel-head"><h2>Request timeline</h2><span class="pill muted">evidence</span></div>
+          <div class="table-wrap">
+            <table><thead><tr><th>#</th><th>Phase</th><th>Label</th><th>Status</th><th>Bytes</th><th>Time</th></tr></thead><tbody id="timeline"></tbody></table>
+          </div>
+          <pre id="inspector-output" class="inspector-output">Select a request row or finding to inspect redacted request/response evidence.</pre>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head"><h2>Raw result</h2><button type="button" class="ghost" id="copy-btn">Copy JSON</button></div>
+          <pre id="output">{}</pre>
+        </section>
       </section>
     </section>
   </main>

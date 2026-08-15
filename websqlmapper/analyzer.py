@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import re
+import textwrap
 from dataclasses import dataclass
-from difflib import SequenceMatcher
+from difflib import SequenceMatcher, unified_diff
 from itertools import combinations
 from statistics import median
 from typing import Iterable
@@ -55,6 +56,24 @@ def similarity(left: str, right: str) -> float:
     backward = SequenceMatcher(None, right_n, left_n, autojunk=False).ratio()
     return (forward + backward) / 2.0
 
+
+
+
+def unified_response_diff(left: str, right: str, *, max_lines: int = 80) -> str:
+    """Return a bounded unified diff over normalized response text."""
+    left_n = normalize_body(left)[:20_000]
+    right_n = normalize_body(right)[:20_000]
+    if left_n == right_n:
+        return ""
+    def lines(value: str) -> list[str]:
+        raw = value.splitlines() or [value]
+        if len(raw) == 1 and len(raw[0]) > 240:
+            return textwrap.wrap(raw[0], width=160, replace_whitespace=False, drop_whitespace=False)
+        return raw
+    diff = list(unified_diff(lines(left_n), lines(right_n), fromfile="left", tofile="right", lineterm=""))
+    if len(diff) > max_lines:
+        diff = diff[:max_lines] + ["... <diff truncated>"]
+    return "\n".join(diff)
 
 def _median_or(values: Iterable[float], fallback: float) -> float:
     items = list(values)

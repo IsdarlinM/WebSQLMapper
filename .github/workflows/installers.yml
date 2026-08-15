@@ -1,0 +1,29 @@
+name: Installer smoke tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  linux-installer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Offline/source-path fallback smoke
+        run: bash scripts/test-install-linux.sh
+      - name: Normal online dependency/install smoke
+        run: bash scripts/test-install-linux-online.sh
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Run CMD installer in isolated temp root
+        shell: cmd
+        run: |
+          set WEBSQLMAPPER_INSTALL_ROOT=%RUNNER_TEMP%\WebSQLMapper
+          set WEBSQLMAPPER_SKIP_PATH=1
+          call scripts\install.cmd
+          %RUNNER_TEMP%\WebSQLMapper\bin\websqlmapper.cmd --version
+          %RUNNER_TEMP%\WebSQLMapper\bin\websqlmapper.cmd --color never doctor

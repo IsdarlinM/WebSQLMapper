@@ -27,7 +27,8 @@ def validate_http_url(url: str) -> None:
 def is_private_or_loopback_target(url: str) -> bool:
     validate_http_url(url)
     host = urlsplit(url).hostname
-    assert host is not None
+    if host is None:  # validate_http_url above should make this unreachable.
+        return False
     if host.lower() == "localhost":
         return True
     try:
