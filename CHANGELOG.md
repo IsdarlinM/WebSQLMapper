@@ -1,13 +1,43 @@
 # Changelog
 
-## Unreleased - Python 3.10 compatibility
+## 0.4.0 - 2026-08-15
 
-- Lowered the minimum supported runtime from Python 3.11 to Python 3.10 (`Requires-Python >=3.10`).
-- Linux and Windows installers now prefer an already-installed compatible Python before considering a new Python installation.
-- Installer-created virtual environments are verified to use the same Python major/minor version selected from the device.
-- Runtime dependencies are installed into that selected interpreter's venv, with controlled failures when dependency installation is impossible.
-- Added Python 3.10 and 3.14 to compatibility metadata/CI coverage, keeping no upper Python bound.
-- Windows installer discovers Python 3.10 through 3.14 local installs and falls back to a winget-provided compatible interpreter only when needed.
+### Added
+
+- Complete redirect engine with never/same-origin/same-host/any policies, hop evidence, loop/max-hop handling, cross-host credential stripping and redirect-drift profiling.
+- Separate connect/read timeout, max-duration, streamed response byte cap, Retry-After handling, retry policies and cookie session modes.
+- mTLS client certificate/private-key support.
+- Cached semantic response analyzer for JSON/HTML/text.
+- Adaptive early-stop and bounded syntax-probe concurrency while keeping timing tests serial.
+- WAF/edge, rate-limit, session/auth, redirect and truncation interference profile.
+- Session-health controls between scan phases.
+- Local injection-point discovery command/API/UI.
+- Structured multipart import with scalar-part discovery and preserved file parts.
+- Async mapper jobs with pause/resume/cancel and auto numeric/string oracle calibration.
+- Bounded Web worker pool, max-job/TTL cleanup and replayable SSE event log with event IDs.
+- Remote Web bind opt-in and token protection, plus loopback Host allow-listing to reduce DNS-rebinding exposure.
+- Reorganized desktop/mobile Web workspace, visual header/cookie editors, inspector tabs, filters, Web templates/reports, accessibility improvements and PWA shell assets.
+- Python 3.10+ compatibility contract and CI definitions through Python 3.14.
+
+### Changed
+
+- Response bodies are streamed and capped before decoding.
+- Scanner and mapper now share semantic response similarity.
+- Mapper inference caches conditions, uses ASCII-first codepoint bounds, and revalidates private-target DNS resolution during long runs.
+- Linux/Windows installers reuse the existing compatible Python >=3.10 and verify the venv keeps the same major/minor.
+- Windows Python discovery uses explicit subroutines instead of compound CMD operator chains.
+
+### Fixed during deep regression/debugging
+
+- Interference scoring could raise a TypeError when summing regex Match/None values.
+- Mapper Web context default could pass unsupported `auto` into the old oracle.
+- Destructive SSE queues could lose events after a browser disconnect.
+- Web jobs could accumulate forever and spawn unlimited daemon threads.
+- Frontend initialization could fail when localStorage access was blocked.
+- Progress used request budget rather than planned work.
+- Response body limits were previously applied after `response.text` materialization.
+- Repeated form parameters could be collapsed during import.
+- Imported multipart scalar fields were not directly selectable.
 
 ## 0.3.0 - 2026-08-15
 

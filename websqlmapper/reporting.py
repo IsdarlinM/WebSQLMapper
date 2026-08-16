@@ -33,6 +33,8 @@ def render_markdown(report: Any) -> str:
         f"- **Reproducibility:** **{data.get('reproducibility', 0)}%**",
         f"- **Probable DBMS:** {dbms_text}",
         f"- **Requests sent:** {data.get('requests_sent', 0)}",
+        f"- **Adaptive early-stop:** {'yes' if data.get('adaptive_stopped') else 'no'}",
+        f"- **Interference profile:** {json.dumps(data.get('interference_profile') or {}, ensure_ascii=False)}",
         "- **CWE:** CWE-89 — Improper Neutralization of Special Elements used in an SQL Command",
         "",
         "## Evidence",
@@ -57,14 +59,31 @@ def render_markdown(report: Any) -> str:
     lines.extend([
         "## Reproduction timeline",
         "",
-        "| # | Phase | Label | Status | Length | Time (ms) |",
-        "|---:|---|---|---:|---:|---:|",
+        "| # | Phase | Label | Status | Length | Time (ms) | Redirects |",
+        "|---:|---|---|---:|---:|---:|---:|",
     ])
     for item in data.get("timeline") or []:
         lines.append(
             f"| {item.get('index')} | {item.get('phase')} | {item.get('label')} | "
-            f"{item.get('status')} | {item.get('length')} | {item.get('elapsed_ms')} |"
+            f"{item.get('status')} | {item.get('length')} | {item.get('elapsed_ms')} | {len(item.get('redirects') or [])} |"
         )
+    redirect_rows = []
+    for item in data.get("timeline") or []:
+        for hop in item.get("redirects") or []:
+            redirect_rows.append((item, hop))
+    if redirect_rows:
+        lines.extend([
+            "",
+            "## Redirect observations",
+            "",
+            "| Request | Hop | Status | Method | Source | Target | Cross host | HTTPS downgrade |",
+            "|---:|---:|---:|---|---|---|---|---|",
+        ])
+        for item, hop in redirect_rows:
+            lines.append(
+                f"| {item.get('index')} | {hop.get('index')} | {hop.get('status')} | {hop.get('method')} | "
+                f"`{hop.get('url')}` | `{hop.get('location')}` | {bool(hop.get('cross_host'))} | {bool(hop.get('https_downgrade'))} |"
+            )
     lines.extend([
         "",
         "## Impact",

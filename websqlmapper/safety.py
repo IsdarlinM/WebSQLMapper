@@ -24,37 +24,52 @@ def validate_http_url(url: str) -> None:
         raise SafetyError("Target URL must include a hostname.")
 
 
-def is_private_or_loopback_target(url: str) -> bool:
+def private_target_addresses(url: str) -> frozenset[str]:
+    """Resolve a target and return its private/loopback addresses, or an empty set.
+
+    The mapper keeps the initial set and revalidates it during long runs so a
+    hostname cannot silently change from a private lab address to a public one.
+    """
     validate_http_url(url)
     host = urlsplit(url).hostname
-    if host is None:  # validate_http_url above should make this unreachable.
-        return False
+    if host is None:
+        return frozenset()
     if host.lower() == "localhost":
-        return True
+        return frozenset({"127.0.0.1", "::1"})
     try:
         direct = ipaddress.ip_address(host)
-        return direct.is_private or direct.is_loopback or direct.is_link_local
     except ValueError:
-        pass
-
+        direct = None
+    if direct is not None:
+        return frozenset({str(direct)}) if (direct.is_private or direct.is_loopback or direct.is_link_local) else frozenset()
     try:
         infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
     except socket.gaierror:
-        return False
-
-    addresses = {info[4][0] for info in infos}
+        return frozenset()
+    addresses = frozenset(info[4][0] for info in infos)
     if not addresses:
-        return False
+        return frozenset()
     for address in addresses:
         ip = ipaddress.ip_address(address)
         if not (ip.is_private or ip.is_loopback or ip.is_link_local):
-            return False
-    return True
+            return frozenset()
+    return addresses
 
 
-def require_private_mapping_target(url: str) -> None:
-    if not is_private_or_loopback_target(url):
+def is_private_or_loopback_target(url: str) -> bool:
+    return bool(private_target_addresses(url))
+
+
+def require_private_mapping_target(url: str, *, expected_addresses: frozenset[str] | None = None) -> frozenset[str]:
+    addresses = private_target_addresses(url)
+    if not addresses:
         raise SafetyError(
             "Blind database mapping is intentionally restricted to localhost/private lab targets. "
             "Remote targets can be scanned for indicators, but automated data reconstruction is disabled."
         )
+    if expected_addresses is not None and addresses != expected_addresses:
+        raise SafetyError(
+            "Private mapping target resolution changed during the run; mapping stopped to prevent DNS rebinding."
+        )
+    return addresses
+

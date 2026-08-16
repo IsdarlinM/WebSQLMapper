@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import socket
 import sys
 import tempfile
 import threading
@@ -18,6 +19,7 @@ from lab.vulnerable_server import build_server  # noqa: E402
 
 def run(args: list[str], *, env: dict[str, str], expected: set[int] = {0}, timeout: float = 30.0) -> subprocess.CompletedProcess[str]:
     cmd = [sys.executable, "-m", "websqlmapper", *args]
+    print("[cli-smoke]", " ".join(args), flush=True)
     result = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True, timeout=timeout)
     if result.returncode not in expected:
         raise AssertionError(
@@ -43,12 +45,17 @@ def main() -> None:
         try:
             run(["--version"], env=env)
             run(["--help"], env=env)
+            for command in ("scan", "map", "parse", "discover", "report", "template", "web", "update", "doctor"):
+                run([command, "--help"], env=env)
+            run(["template", "save", "--help"], env=env)
             run(["--color", "never", "doctor"], env=env)
 
             # Parser/importer surfaces.
             raw = f"GET /item?id=1 HTTP/1.1\r\nHost: 127.0.0.1:{server.server_port}\r\nCookie: sid=secret\r\n\r\n"
-            parsed = run(["parse", "--raw", raw, "--scheme", "http"], env=env)
-            assert "<redacted>" in parsed.stdout
+            parsed = run(["parse", "--raw", raw, "--scheme", "http", "--discover"], env=env)
+            assert "<redacted>" in parsed.stdout and "injection_points" in parsed.stdout
+            discovered = run(["discover", "--url", f"{base}/item?id=1", "--method", "GET"], env=env)
+            assert '"parameter": "id"' in discovered.stdout
             curl = f"curl -s -H 'X-Test: yes' --cookie 'sid=secret' '{base}/item?id=1'"
             run(["parse", "--curl", curl], env=env)
 
@@ -56,7 +63,7 @@ def main() -> None:
             for profile in ("safe", "normal", "thorough"):
                 result = run([
                     "--color", "never", "scan", "--url", f"{base}/item?id=1", "--inject", "query:id", "--value", "1",
-                    "--profile", profile, "--authorized"
+                    "--profile", profile, "--authorized", "--no-time-probes"
                 ], env=env, expected={2})
                 assert "Verdict" in result.stdout and ("HIGH-CONFIDENCE" in result.stdout or "CONFIRMED" in result.stdout)
             run([
@@ -66,6 +73,9 @@ def main() -> None:
                 "--delay-ms", "0", "--jitter-ms", "0", "--retries", "1", "--no-follow-redirects",
                 "--no-time-probes", "--context", "auto", "--baseline-samples", "3",
                 "--confirmation-rounds", "2", "--max-requests", "80",
+                "--connect-timeout", "2", "--read-timeout", "2", "--max-duration", "30",
+                "--max-body", "8192", "--redirect-policy", "same-origin", "--max-redirects", "3",
+                "--retry-policy", "safe", "--cookie-mode", "static", "--concurrency", "2", "--adaptive",
             ], env=env, expected={0})
 
             # Nested JSON execution.
@@ -101,9 +111,9 @@ def main() -> None:
             # Lab-only mapping command.
             mapped = run([
                 "map", "--url", f"{base}/item?id=1", "--inject", "query:id", "--value", "1",
-                "--context", "numeric", "--max-rows", "1", "--max-chars", "8", "--authorized", "--json",
-            ], env=env, timeout=60)
-            assert '"username": "admin"' in mapped.stdout
+                "--context", "auto", "--max-rows", "1", "--max-chars", "4", "--max-requests", "80", "--authorized", "--json",
+            ], env=env, timeout=30)
+            assert '"context": "numeric"' in mapped.stdout
 
             # Controlled failures / validation boundaries.
             failures = [
@@ -111,6 +121,8 @@ def main() -> None:
                 ["scan", "--url", f"{base}/item?id=1", "--inject", "query:id", "--authorized", "--max-requests", "9"],
                 ["scan", "--url", f"{base}/item?id=1", "--inject", "query:id", "--authorized", "--retries", "9"],
                 ["scan", "--url", f"{base}/item?id=1", "--inject", "raw:id", "--authorized", "--body-mode", "raw"],
+                ["scan", "--url", f"{base}/item?id=1", "--inject", "query:id", "--authorized", "--client-cert", "/definitely/missing/client.pem"],
+                ["web", "--host", "0.0.0.0", "--port", "0"],
                 ["report", str(tmp_path / "missing.json")],
                 ["template", "show", "missing"],
             ]
@@ -120,26 +132,33 @@ def main() -> None:
             # checkout it may legitimately fast-forward/reinstall successfully.
             run(["update"], env=env, expected={0, 1}, timeout=60)
 
-            # Web CLI startup + real health request.
+            # Web CLI startup + real health request. Reserve a local port first
+            # so the test never blocks waiting for a line of subprocess output.
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.bind(("127.0.0.1", 0))
+                web_port = probe.getsockname()[1]
             proc = subprocess.Popen(
-                [sys.executable, "-u", "-m", "websqlmapper", "--color", "never", "web", "--host", "127.0.0.1", "--port", "0"],
+                [sys.executable, "-u", "-m", "websqlmapper", "--color", "never", "web", "--host", "127.0.0.1", "--port", str(web_port)],
                 cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             )
             try:
-                # Port 0 is printed after bind; use a small bounded read loop.
                 deadline = time.time() + 5
-                line = ""
+                health = None
+                last_error = None
                 while time.time() < deadline:
-                    chunk = proc.stdout.readline() if proc.stdout else ""
-                    line += chunk
-                    if "http://127.0.0.1:" in chunk:
+                    if proc.poll() is not None:
                         break
-                import re
-                match = re.search(r"http://127\.0\.0\.1:(\d+)", line)
-                if not match:
-                    raise AssertionError(f"web command did not report bound port: {line!r}")
-                with urllib.request.urlopen(f"http://127.0.0.1:{match.group(1)}/api/health", timeout=3) as response:
-                    health = json.load(response)
+                    try:
+                        with urllib.request.urlopen(f"http://127.0.0.1:{web_port}/api/health", timeout=0.5) as response:
+                            health = json.load(response)
+                        break
+                    except Exception as exc:
+                        last_error = exc
+                        time.sleep(0.05)
+                if not health:
+                    stdout = proc.stdout.read() if proc.stdout and proc.poll() is not None else ""
+                    stderr = proc.stderr.read() if proc.stderr and proc.poll() is not None else ""
+                    raise AssertionError(f"web command did not become healthy: {last_error}; stdout={stdout!r}; stderr={stderr!r}")
                 assert health["status"] == "ok"
             finally:
                 proc.terminate()

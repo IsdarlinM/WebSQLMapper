@@ -1,0 +1,9 @@
+{
+  "name": "WebSQLMapper",
+  "short_name": "SQLMapper",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#080c11",
+  "theme_color": "#080c11",
+  "description": "Authorized SQL injection differential testing workspace"
+}

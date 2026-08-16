@@ -82,3 +82,41 @@ class IntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class V040IntegrationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.server = build_server("127.0.0.1", 0)
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+        cls.base = f"http://127.0.0.1:{cls.server.server_port}"
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.server.shutdown(); cls.server.server_close(); cls.server.db.close()  # type: ignore[attr-defined]
+        cls.thread.join(timeout=2)
+
+    def test_adaptive_early_stop_reduces_work(self) -> None:
+        cfg = RequestConfig(url=self.base+"/item?id=1", parameter="id", location="query")
+        report = SQLiScanner().scan(cfg, original_value="1", authorized=True, profile="normal", context="numeric", adaptive=True)
+        self.assertTrue(report.likely_vulnerable)
+        self.assertTrue(report.adaptive_stopped)
+        self.assertLess(report.requests_sent, report.request_budget or 9999)
+
+    def test_waf_interference_is_not_confirmed_sqli(self) -> None:
+        cfg = RequestConfig(url=self.base+"/waf?id=1", parameter="id", location="query")
+        report = SQLiScanner().scan(cfg, original_value="1", authorized=True, profile="safe", context="numeric")
+        self.assertFalse(report.likely_vulnerable)
+        self.assertGreaterEqual(report.interference_profile.get("waf_or_edge_blocking", 0), 50)
+
+
+    def test_redirect_behavior_drift_is_profiled_separately(self) -> None:
+        cfg = RequestConfig(url=self.base+"/redirect-on-probe?id=1", parameter="id", location="query", redirect_policy="any")
+        report = SQLiScanner().scan(cfg, original_value="1", authorized=True, profile="safe", context="numeric")
+        self.assertGreater(report.interference_profile.get("redirect_behavior_drift", 0), 0)
+
+    def test_mapper_auto_context_recovers_data(self) -> None:
+        cfg = RequestConfig(url=self.base+"/item?id=1", parameter="id", location="query")
+        result = SQLiteBlindMapper().map_database(cfg, original_value="1", context="auto", authorized=True, common_tables=["users"], common_columns=["username"], max_rows=1, max_chars=8, max_requests=500)
+        self.assertEqual(result.context, "numeric")
+        self.assertEqual(result.tables["users"]["rows"][0]["username"], "admin")

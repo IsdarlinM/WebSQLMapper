@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import base64
 import json
 import re
 import shlex
+from email import policy
+from email.parser import BytesParser
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, unquote_plus, urlsplit
 
-from .models import RequestConfig
+from .models import InjectionPoint, RequestConfig
 
 
 class RequestParseError(ValueError):
@@ -67,11 +70,43 @@ def _body_from_content_type(content_type: str, body: str) -> tuple[str, Any, str
         except json.JSONDecodeError as exc:
             raise RequestParseError(f"invalid JSON request body: {exc.msg}") from exc
     if "application/x-www-form-urlencoded" in lowered:
-        return "form", dict(parse_qsl(body, keep_blank_values=True)), None
+        pairs = parse_qsl(body, keep_blank_values=True)
+        names = [name for name, _ in pairs]
+        data: Any = pairs if len(names) != len(set(names)) else dict(pairs)
+        return "form", data, None
     if "multipart/form-data" in lowered:
-        # Preserve raw multipart exactly. Injection can still target a placeholder
-        # in raw bodies; structured multipart generation is supported separately.
-        return "raw", {}, body
+        try:
+            message = BytesParser(policy=policy.default).parsebytes(
+                (f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n").encode("utf-8")
+                + body.replace("\n", "\r\n").encode("utf-8", errors="replace")
+            )
+        except (ValueError, TypeError) as exc:
+            raise RequestParseError(f"invalid multipart request body: {exc}") from exc
+        if not message.is_multipart():
+            raise RequestParseError("multipart/form-data body does not match its boundary")
+        pairs: list[list[object]] = []
+        for part in message.iter_parts():
+            name = part.get_param("name", header="content-disposition")
+            if not name:
+                continue
+            payload = part.get_payload(decode=True) or b""
+            filename = part.get_filename()
+            if filename:
+                value: object = {
+                    "filename": filename,
+                    "content_type": part.get_content_type() or "application/octet-stream",
+                    "content_base64": base64.b64encode(payload).decode("ascii"),
+                }
+            else:
+                charset = part.get_content_charset() or "utf-8"
+                try:
+                    value = payload.decode(charset, errors="replace")
+                except LookupError:
+                    value = payload.decode("utf-8", errors="replace")
+            pairs.append([str(name), value])
+        names = [str(item[0]) for item in pairs]
+        data: Any = pairs if len(names) != len(set(names)) else {str(k): v for k, v in pairs}
+        return "multipart", data, None
     if "xml" in lowered:
         return "xml", {}, body
     if body:
@@ -94,6 +129,7 @@ def parse_raw_request(text: str, *, scheme: str = "https") -> ImportedRequest:
         raise RequestParseError(f"unsupported HTTP method: {method}")
 
     headers: dict[str, str] = {}
+    seen_headers: set[str] = set()
     host = ""
     for line in lines[1:]:
         if not line.strip():
@@ -107,9 +143,13 @@ def parse_raw_request(text: str, *, scheme: str = "https") -> ImportedRequest:
         value = value.strip()
         if not name:
             raise RequestParseError("HTTP header name cannot be empty")
-        if name.lower() == "host":
+        lowered_name = name.lower()
+        if lowered_name in seen_headers and lowered_name not in {"cookie"}:
+            raise RequestParseError(f"duplicate HTTP header is not losslessly supported: {name}")
+        seen_headers.add(lowered_name)
+        if lowered_name == "host":
             host = value
-        elif name.lower() not in {"content-length", "cookie"}:
+        elif lowered_name not in {"content-length", "cookie"}:
             headers[name] = value
 
     if target.startswith(("http://", "https://")):
@@ -170,9 +210,16 @@ def parse_curl(text: str) -> ImportedRequest:
     headers: dict[str, str] = {}
     cookies: dict[str, str] = {}
     data_parts: list[str] = []
+    form_parts: list[list[object]] = []
     proxy: str | None = None
     verify_tls = True
     ca_bundle: str | None = None
+    client_cert: str | None = None
+    client_key: str | None = None
+    connect_timeout: float | None = None
+    max_duration: float = 300.0
+    max_redirects: int = 5
+    retries: int = 1
     follow_redirects = False
     auth_type: str | None = None
     auth_username: str | None = None
@@ -191,15 +238,29 @@ def parse_curl(text: str) -> ImportedRequest:
             if i >= len(tokens) or ":" not in tokens[i]:
                 raise RequestParseError(f"{token} requires 'Name: value'")
             name, value = tokens[i].split(":", 1)
+            name = name.strip()
             if name.lower() == "cookie":
                 cookies.update(_parse_cookie_header(value))
             else:
-                headers[name.strip()] = value.strip()
+                if any(existing.lower() == name.lower() for existing in headers):
+                    raise RequestParseError(f"duplicate cURL header is not losslessly supported: {name}")
+                headers[name] = value.strip()
         elif token in {"-b", "--cookie"}:
             i += 1
             if i >= len(tokens):
                 raise RequestParseError(f"{token} requires cookie data")
             cookies.update(_parse_cookie_header(tokens[i]))
+        elif token in {"-F", "--form"}:
+            i += 1
+            if i >= len(tokens) or "=" not in tokens[i]:
+                raise RequestParseError(f"{token} requires NAME=VALUE")
+            name, form_value = tokens[i].split("=", 1)
+            if not name:
+                raise RequestParseError(f"{token} form name cannot be empty")
+            if form_value.startswith("@") or form_value.startswith("<"):
+                raise RequestParseError("cURL multipart file references are not read automatically; import a captured raw HTTP request instead")
+            form_parts.append([name, form_value])
+            method = method or "POST"
         elif token in {"-d", "--data", "--data-raw", "--data-binary", "--data-ascii"}:
             i += 1
             if i >= len(tokens):
@@ -232,6 +293,40 @@ def parse_curl(text: str) -> ImportedRequest:
             if i >= len(tokens):
                 raise RequestParseError("--cacert requires a file path")
             ca_bundle = tokens[i]
+        elif token == "--cert":
+            i += 1
+            if i >= len(tokens):
+                raise RequestParseError("--cert requires a certificate path")
+            client_cert = tokens[i]
+        elif token == "--key":
+            i += 1
+            if i >= len(tokens):
+                raise RequestParseError("--key requires a private-key path")
+            client_key = tokens[i]
+        elif token in {"--connect-timeout", "--max-time"}:
+            i += 1
+            if i >= len(tokens):
+                raise RequestParseError(f"{token} requires seconds")
+            try:
+                seconds = float(tokens[i])
+            except ValueError as exc:
+                raise RequestParseError(f"{token} requires a numeric value") from exc
+            if token == "--connect-timeout": connect_timeout = seconds
+            else: max_duration = seconds
+        elif token == "--max-redirs":
+            i += 1
+            if i >= len(tokens): raise RequestParseError("--max-redirs requires an integer")
+            try: max_redirects = int(tokens[i])
+            except ValueError as exc: raise RequestParseError("--max-redirs requires an integer") from exc
+        elif token == "--retry":
+            i += 1
+            if i >= len(tokens): raise RequestParseError("--retry requires an integer")
+            try: retries = int(tokens[i])
+            except ValueError as exc: raise RequestParseError("--retry requires an integer") from exc
+        elif token in {"-A", "--user-agent"}:
+            i += 1
+            if i >= len(tokens): raise RequestParseError(f"{token} requires a value")
+            headers["User-Agent"] = tokens[i]
         elif token in {"-L", "--location"}:
             follow_redirects = True
         elif token in {"-u", "--user"}:
@@ -247,9 +342,6 @@ def parse_curl(text: str) -> ImportedRequest:
                 raise RequestParseError("--url requires a URL")
             url = tokens[i]
         elif token.startswith("-"):
-            # Ignore transport-only curl switches that do not change semantic
-            # request content. Unknown switches with values are intentionally not
-            # guessed because that can silently misparse a request.
             if token in {"-s", "--silent", "-S", "--show-error", "--compressed", "--fail", "--fail-with-body"}:
                 pass
             else:
@@ -264,11 +356,18 @@ def parse_curl(text: str) -> ImportedRequest:
     if not url:
         raise RequestParseError("cURL command does not contain a URL")
     method = method or "GET"
+    if form_parts and data_parts:
+        raise RequestParseError("cannot combine cURL multipart --form and --data options in one imported request")
     body = "&".join(data_parts)
     content_type = next((v for k, v in headers.items() if k.lower() == "content-type"), "")
-    body_mode, data, raw_body = _body_from_content_type(content_type, body)
-    if body and not content_type:
-        # curl -d defaults to application/x-www-form-urlencoded.
+    if form_parts:
+        names = [str(item[0]) for item in form_parts]
+        data = form_parts if len(names) != len(set(names)) else {str(k): v for k, v in form_parts}
+        body_mode, raw_body = "multipart", None
+        headers.pop(next((k for k in headers if k.lower() == "content-type"), ""), None)
+    else:
+        body_mode, data, raw_body = _body_from_content_type(content_type, body)
+    if body and not content_type and not form_parts:
         body_mode, data, raw_body = "form", dict(parse_qsl(body, keep_blank_values=True)), None
         headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
 
@@ -283,7 +382,14 @@ def parse_curl(text: str) -> ImportedRequest:
         proxy=proxy,
         verify_tls=verify_tls,
         ca_bundle=ca_bundle,
+        client_cert=client_cert,
+        client_key=client_key,
+        connect_timeout=connect_timeout,
+        max_duration=max_duration,
         follow_redirects=follow_redirects,
+        redirect_policy="any" if follow_redirects else "never",
+        max_redirects=max_redirects,
+        retries=retries,
         auth_type=auth_type,
         auth_username=auth_username,
         auth_password=auth_password,
@@ -298,8 +404,13 @@ def infer_original_value(config: RequestConfig, location: str, parameter: str, f
             name, index = split_index(parameter)
             values = [value for key, value in parse_qsl(urlsplit(config.url).query, keep_blank_values=True) if key == name]
             return values[index] if values else fallback
-        if location == "form" and isinstance(config.data, dict):
-            return str(config.data.get(parameter, fallback))
+        if location == "form":
+            name, index = split_index(parameter)
+            if isinstance(config.data, dict):
+                return str(config.data.get(name, fallback))
+            if isinstance(config.data, list):
+                values = [str(item[1]) for item in config.data if isinstance(item, (list, tuple)) and len(item) == 2 and str(item[0]) == name]
+                return values[index] if index < len(values) else fallback
         if location in {"json", "graphql"}:
             value = get_nested(config.data, parameter)
             return fallback if value is None else str(value)
@@ -346,3 +457,68 @@ def get_nested(data: Any, path: str) -> Any:
                 raise KeyError(path)
             current = current[token]
     return current
+
+
+_SENSITIVE_POINT = re.compile(r"(?i)(?:pass|secret|token|auth|session|cookie|api[_-]?key|csrf|xsrf)")
+
+def _walk_json_points(value: Any, prefix: str = "") -> list[InjectionPoint]:
+    points: list[InjectionPoint] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if isinstance(item, (dict, list)):
+                points.extend(_walk_json_points(item, path))
+            else:
+                points.append(InjectionPoint("json", path, "" if item is None else str(item), bool(_SENSITIVE_POINT.search(path)), path))
+    elif isinstance(value, list):
+        for idx, item in enumerate(value):
+            path = f"{prefix}[{idx}]"
+            if isinstance(item, (dict, list)):
+                points.extend(_walk_json_points(item, path))
+            else:
+                points.append(InjectionPoint("json", path, "" if item is None else str(item), bool(_SENSITIVE_POINT.search(path)), path))
+    return points
+
+def discover_injection_points(config: RequestConfig) -> list[InjectionPoint]:
+    """Enumerate existing request-controlled values without sending traffic."""
+    points: list[InjectionPoint] = []
+    query_pairs = parse_qsl(urlsplit(config.url).query, keep_blank_values=True)
+    counts: dict[str, int] = {}
+    totals: dict[str, int] = {}
+    for name, _ in query_pairs: totals[name] = totals.get(name, 0) + 1
+    for name, value in query_pairs:
+        idx = counts.get(name, 0); counts[name] = idx + 1
+        parameter = f"{name}[{idx}]" if totals[name] > 1 else name
+        points.append(InjectionPoint("query", parameter, value, bool(_SENSITIVE_POINT.search(name)), parameter))
+    if config.body_mode in {"json", "graphql"}:
+        for point in _walk_json_points(config.data):
+            point.location = "graphql" if config.body_mode == "graphql" else "json"
+            points.append(point)
+    elif config.body_mode in {"form", "multipart"}:
+        if isinstance(config.data, dict):
+            pairs = [(str(k), v) for k, v in config.data.items()]
+        elif isinstance(config.data, list):
+            pairs = [(str(item[0]), item[1]) for item in config.data if isinstance(item, (list, tuple)) and len(item) == 2]
+        else: pairs = []
+        totals = {}; counts = {}
+        for name, _ in pairs: totals[name] = totals.get(name, 0) + 1
+        for name, value in pairs:
+            idx = counts.get(name, 0); counts[name] = idx + 1
+            parameter = f"{name}[{idx}]" if totals[name] > 1 else name
+            if isinstance(value, dict) and "filename" in value:
+                continue
+            points.append(InjectionPoint("form", parameter, str(value), bool(_SENSITIVE_POINT.search(name)), parameter))
+    for name, value in config.cookies.items():
+        points.append(InjectionPoint("cookie", name, "<redacted>" if _SENSITIVE_POINT.search(name) else value, bool(_SENSITIVE_POINT.search(name)), name))
+    ignored_headers = {"host", "content-length", "content-type", "accept", "accept-encoding", "connection"}
+    for name, value in config.headers.items():
+        if name.lower() in ignored_headers: continue
+        sensitive = bool(_SENSITIVE_POINT.search(name))
+        points.append(InjectionPoint("header", name, "<redacted>" if sensitive else value, sensitive, name))
+    segments = [unquote_plus(x) for x in urlsplit(config.url).path.split("/") if x]
+    for idx, value in enumerate(segments, 1):
+        if value and (value.isdigit() or re.fullmatch(r"[A-Za-z0-9._~-]{1,80}", value)):
+            points.append(InjectionPoint("path", str(idx), value, False, f"segment {idx}: {value}"))
+    if config.raw_body and "{{INJECT}}" in config.raw_body:
+        points.append(InjectionPoint("raw", "body", "{{INJECT}}", False, "raw body placeholder"))
+    return points

@@ -34,3 +34,11 @@ class AnalyzerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class SemanticAnalyzerTests(unittest.TestCase):
+    def test_semantic_json_masks_dynamic_keys(self) -> None:
+        from websqlmapper.models import ResponseSnapshot
+        from websqlmapper.analyzer import snapshot_similarity
+        a = ResponseSnapshot(200, '{"request_id":"aaa","timestamp":"2026-01-01T00:00:00Z","data":{"value":7}}', 0.1, "x", content_type="application/json")
+        b = ResponseSnapshot(200, '{"request_id":"bbb","timestamp":"2026-08-15T00:00:00Z","data":{"value":7}}', 0.1, "x", content_type="application/json")
+        self.assertEqual(snapshot_similarity(a, b), 1.0)

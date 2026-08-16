@@ -1,81 +1,80 @@
-# WebSQLMapper installation and runtime notes
+# WebSQLMapper v0.4.0 installation
 
-This document describes the v0.3.0 installers and their failure behavior.
+WebSQLMapper requires **Python 3.10 or newer** and has no upper Python version bound. The installers prefer an already installed compatible interpreter and install dependencies into a virtual environment created by that same Python `major.minor`.
 
-## Runtime requirements
-
-WebSQLMapper requires:
-
-- Python 3.10 or newer;
-- `requests` 2.32 or newer and lower than 3.0;
-- Git for the `websqlmapper update` command.
-
-PySocks is optional and is needed only when a SOCKS proxy URL is selected. No Node.js, Java, Go, Rust, PHP, Ruby, or other programming language is required at runtime. The browser UI is static HTML/CSS/JavaScript served by the Python process.
-
-## Linux installer
-
-Run:
+## Linux / Unix / Termux
 
 ```bash
 bash scripts/install-linux.sh
 ```
 
-The script:
+The installer searches for a compatible `python3`, `python`, and versioned Python 3.10+ command. If Python or Git is missing it can bootstrap system packages with Termux `pkg`, `apt`, `dnf`, `pacman`, `apk`, or Homebrew.
 
-1. looks for an already-installed Python 3.10+ and prefers the current/default interpreter when compatible;
-2. installs Python, pip/venv support and Git if they are missing and a supported package manager is available;
-3. copies the project into `~/.websqlmapper/src`;
-4. creates `~/.websqlmapper/venv`;
-5. installs packaging tools and `websqlmapper[socks]`, falling back to core HTTP/HTTPS dependencies if optional SOCKS installation fails;
-   All Python packages are installed inside the venv created by the selected Python major/minor version; the installer aborts if the venv version differs from the selected interpreter.
-6. creates `~/.local/bin/websqlmapper`;
-7. appends a `WebSQLMapper environment` block to the applicable user shell files;
-8. exports `WEBSQLMAPPER_HOME` and prepends the command directory to `PATH` for the current installer process;
-9. verifies `websqlmapper --version` before reporting success.
+It then:
 
-Supported package-manager discovery currently covers Termux `pkg`, `apt`, `dnf`, `pacman`, Alpine `apk`, and Homebrew.
+1. records the selected Python major/minor;
+2. copies the project under `$WEBSQLMAPPER_INSTALL_ROOT` or `~/.websqlmapper`;
+3. creates a venv with the selected interpreter;
+4. verifies the venv major/minor is identical;
+5. installs packaging tools and `websqlmapper[socks]` where available;
+6. falls back to core installation when optional SOCKS support cannot be resolved;
+7. has a source-path fallback for restricted/offline environments when a compatible Requests installation is already available;
+8. writes a `websqlmapper` wrapper;
+9. appends `WEBSQLMAPPER_HOME` and the command directory to supported shell startup files;
+10. runs a post-install version check.
 
-`WEBSQLMAPPER_INSTALL_ROOT`, `WEBSQLMAPPER_BIN_DIR`, and `WEBSQLMAPPER_SKIP_PATH` are intended for controlled installation/testing environments.
+Environment overrides useful for testing/automation:
 
-## Windows CMD installer
+```text
+WEBSQLMAPPER_INSTALL_ROOT
+WEBSQLMAPPER_BIN_DIR
+WEBSQLMAPPER_SKIP_PATH=1
+WEBSQLMAPPER_OFFLINE_TEST=1
+```
 
-Run from Command Prompt:
+The offline mode never changes the selected Python version.
+
+## Windows CMD
 
 ```bat
 scripts\install.cmd
 ```
 
-The script does not use PowerShell. It:
+The installer is pure CMD. It checks real `sys.version_info` rather than trusting executable names. Candidate order includes `python`, `python3`, the Windows `py` launcher, version-specific launcher targets, and standard local Python install paths.
 
-1. looks for an already-installed Python 3.10+ and prefers the current/default interpreter when compatible through the Python launcher or `python`;
-2. if no compatible Python exists, attempts Python 3.13 with `winget` and falls back to the minimum supported Python 3.10 package;
-3. if Git is missing and winget is available, attempts `winget install Git.Git`;
-4. copies the project to `%LOCALAPPDATA%\WebSQLMapper\src`;
-5. creates an isolated venv;
-6. installs dependencies, attempting optional SOCKS support first; the installer verifies the venv uses the exact selected Python major/minor version before installing packages;
-7. creates `%LOCALAPPDATA%\WebSQLMapper\bin\websqlmapper.cmd`;
-8. persists `WEBSQLMAPPER_HOME` and appends the command directory to `HKCU\Environment\Path`;
-9. verifies the command before success is printed.
+If no compatible Python exists, `winget` first attempts Python 3.13 and then Python 3.10 as a fallback. Git is also bootstrapped through `winget` when possible because the update command uses Git.
 
-Open a new Command Prompt after installation to inherit the updated user environment.
+The Windows installer:
 
-## Installer tests
+1. selects Python >=3.10;
+2. records its major/minor;
+3. copies the source into `%LOCALAPPDATA%\WebSQLMapper` by default;
+4. creates `%INSTALL_ROOT%\venv` using that exact interpreter;
+5. verifies the venv version matches the selected version;
+6. installs dependencies using `%VENV_DIR%\Scripts\python.exe -m pip`;
+7. creates `%INSTALL_ROOT%\bin\websqlmapper.cmd`;
+8. persists `WEBSQLMAPPER_HOME`;
+9. appends the command directory to the **user** PATH;
+10. executes `websqlmapper --version` as a final verification.
 
-Linux smoke:
+If Python is missing and `winget` is unavailable, the installer stops with an explicit error rather than using an unsupported runtime.
 
-```bash
-bash scripts/test-install-linux.sh
+## Dependencies
+
+Core runtime:
+
+```text
+Python >=3.10
+requests >=2.32,<3
 ```
 
-Windows native smoke is executed by `.github/workflows/installers.yml` on `windows-latest`.
+Optional SOCKS proxy support:
 
-Windows-container smoke on a compatible Windows Docker host:
-
-```bat
-scripts\test-windows-docker.cmd
+```text
+PySocks >=1.7.1,<2
 ```
 
-The Docker smoke checks that Docker reports Windows-container mode, then builds and runs `docker\Dockerfile.windows`.
+The application itself does not require Node.js, Java, Go, Rust, or another runtime language.
 
 ## Uninstall
 
@@ -91,4 +90,26 @@ Windows:
 scripts\uninstall.cmd
 ```
 
-The uninstallers remove the runtime/wrapper and environment integration while preserving user configuration/templates.
+## Installer verification
+
+Linux smoke:
+
+```bash
+bash scripts/test-install-linux.sh
+```
+
+Network/package-index smoke:
+
+```bash
+bash scripts/test-install-linux-online.sh
+```
+
+Windows definitions:
+
+```text
+docker/Dockerfile.windows
+scripts/test-windows-docker.cmd
+.github/workflows/installers.yml
+```
+
+A Windows container requires a Windows Docker host capable of Windows containers; it cannot run on a Linux-only Docker daemon.

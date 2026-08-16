@@ -5,6 +5,19 @@ from typing import Any
 
 
 @dataclass(slots=True)
+class RedirectHop:
+    index: int
+    status: int
+    method: str
+    url: str
+    location: str | None
+    elapsed_ms: float
+    cross_host: bool = False
+    cross_origin: bool = False
+    https_downgrade: bool = False
+
+
+@dataclass(slots=True)
 class RequestConfig:
     url: str
     method: str = "GET"
@@ -15,11 +28,18 @@ class RequestConfig:
     cookies: dict[str, str] = field(default_factory=dict)
     body_mode: str = "auto"
     raw_body: str | None = None
-    timeout: float = 8.0
+    timeout: float = 8.0  # legacy fallback for connect/read timeout
+    connect_timeout: float | None = None
+    read_timeout: float | None = None
+    max_duration: float = 300.0
     proxy: str | None = None
     verify_tls: bool = True
     ca_bundle: str | None = None
-    follow_redirects: bool = False
+    client_cert: str | None = None
+    client_key: str | None = None
+    follow_redirects: bool = False  # legacy compatibility switch
+    redirect_policy: str = "never"  # never|same-origin|same-host|any
+    max_redirects: int = 5
     auth_type: str | None = None
     auth_username: str | None = None
     auth_password: str | None = None
@@ -28,9 +48,25 @@ class RequestConfig:
     delay_ms: int = 0
     jitter_ms: int = 0
     retries: int = 1
+    retry_policy: str = "safe"  # safe|all|none
+    cookie_mode: str = "static"  # static|session|merge
+    max_body_bytes: int = 1_500_000
+    concurrency: int = 1
 
     def clone_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    @property
+    def effective_redirect_policy(self) -> str:
+        if self.redirect_policy != "never":
+            return self.redirect_policy
+        return "any" if self.follow_redirects else "never"
+
+    @property
+    def effective_timeout(self) -> tuple[float, float]:
+        connect = self.timeout if self.connect_timeout is None else self.connect_timeout
+        read = self.timeout if self.read_timeout is None else self.read_timeout
+        return float(connect), float(read)
 
 
 @dataclass(slots=True)
@@ -46,6 +82,10 @@ class ResponseSnapshot:
     request_headers: dict[str, str] = field(default_factory=dict)
     request_body: str | None = None
     attempt: int = 1
+    content_type: str = ""
+    body_truncated: bool = False
+    redirects: list[RedirectHop] = field(default_factory=list)
+    redirect_outcome: str | None = None
 
     @property
     def length(self) -> int:
@@ -77,6 +117,22 @@ class RequestEvidence:
     request_headers: dict[str, str] = field(default_factory=dict)
     request_body: str | None = None
     response_excerpt: str = ""
+    content_type: str = ""
+    body_truncated: bool = False
+    redirects: list[dict[str, Any]] = field(default_factory=list)
+    redirect_outcome: str | None = None
+
+
+@dataclass(slots=True)
+class InjectionPoint:
+    location: str
+    parameter: str
+    value: str
+    sensitive: bool = False
+    label: str = ""
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
 
 
 @dataclass(slots=True)
@@ -100,6 +156,9 @@ class ScanReport:
     profile: str = "normal"
     stopped_early: bool = False
     context_profile: dict[str, object] = field(default_factory=dict)
+    interference_profile: dict[str, int] = field(default_factory=dict)
+    planned_requests: int | None = None
+    adaptive_stopped: bool = False
 
     @property
     def likely_vulnerable(self) -> bool:

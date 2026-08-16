@@ -125,6 +125,53 @@ class VulnerableHandler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/path-item/"):
             self._sql(unquote(parsed.path.removeprefix("/path-item/")))
             return
+        if parsed.path == "/redirect-chain":
+            self.send_response(302); self.send_header("Location", "/redirect-step2"); self.end_headers(); return
+        if parsed.path == "/redirect-step2":
+            self.send_response(301); self.send_header("Location", "/dynamic"); self.end_headers(); return
+        if parsed.path == "/redirect-loop-a":
+            self.send_response(302); self.send_header("Location", "/redirect-loop-b"); self.end_headers(); return
+        if parsed.path == "/redirect-loop-b":
+            self.send_response(302); self.send_header("Location", "/redirect-loop-a"); self.end_headers(); return
+        if parsed.path == "/redirect-cross-host":
+            host, port = self.server.server_address[:2]  # type: ignore[attr-defined]
+            self.send_response(302); self.send_header("Location", f"http://localhost:{port}/dynamic"); self.end_headers(); return
+        if parsed.path == "/redirect-login":
+            self.send_response(302); self.send_header("Location", "/login"); self.end_headers(); return
+        if parsed.path == "/redirect-on-probe":
+            value = parse_qs(parsed.query, keep_blank_values=True).get("id", ["1"])[0]
+            if any(token in value.upper() for token in (" AND ", " OR ", "'", '"')):
+                self.send_response(302); self.send_header("Location", "/login"); self.end_headers(); return
+            self._send(200, "OK")
+            return
+        if parsed.path == "/login":
+            self._send(200, "Please log in")
+            return
+        if parsed.path == "/large":
+            self._send(200, "X" * 2_500_000)
+            return
+        if parsed.path == "/retry-after":
+            self.server.retry_after_count += 1  # type: ignore[attr-defined]
+            if self.server.retry_after_count == 1:  # type: ignore[attr-defined]
+                self._send(429, "slow down", Retry_After="0")
+            else:
+                self._send(200, "ok")
+            return
+        if parsed.path == "/cookie-rotate":
+            cookie = SimpleCookie(); cookie.load(self.headers.get("Cookie", ""))
+            current = cookie.get("rotating").value if cookie.get("rotating") else "missing"
+            self._send(200, current, Set_Cookie="rotating=next; Path=/")
+            return
+        if parsed.path == "/waf":
+            value = parse_qs(parsed.query, keep_blank_values=True).get("id", ["1"])[0]
+            if any(token in value.upper() for token in (" AND ", " OR ", "'", '"')):
+                self._send(403, "Request blocked by web application firewall")
+            else:
+                self._send(200, "OK")
+            return
+        if parsed.path == "/dynamic-json":
+            self._send(200, json.dumps({"ok": True, "request_id": str(uuid.uuid4()), "timestamp": datetime.now(timezone.utc).isoformat(), "data": {"value": 7}}), "application/json")
+            return
         if parsed.path == "/redirect":
             self.send_response(302)
             self.send_header("Location", "/dynamic")
@@ -151,6 +198,7 @@ def build_server(host: str = "127.0.0.1", port: int = 0) -> ThreadingHTTPServer:
     server = ThreadingHTTPServer((host, port), VulnerableHandler)
     server.db = build_db()  # type: ignore[attr-defined]
     server.flaky_count = 0  # type: ignore[attr-defined]
+    server.retry_after_count = 0  # type: ignore[attr-defined]
     return server
 
 

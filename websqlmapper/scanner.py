@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import re
+import threading
+import time
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict
 from statistics import median
 from typing import Iterable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -12,7 +16,7 @@ from .analyzer import (
     confidence_from_score,
     cross_similarity,
     profile_baseline,
-    similarity,
+    snapshot_similarity,
     unified_response_diff,
 )
 from .control import ScanCancelled, ScanControl
@@ -21,9 +25,11 @@ from .payloads import BOOLEAN_PROBES, ERROR_SIGNATURES, SYNTAX_PROBES, TIME_PROB
 from .safety import require_authorization, validate_http_url
 from .transport import HTTPClient, redact_text_secrets
 
-
 _NUMBER = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$")
 _SECRET_NAME = re.compile(r"(?i)(?:pass|secret|token|key|auth|session|cookie)")
+_WAF_TEXT = re.compile(r"(?i)(?:request blocked|access denied|forbidden|web application firewall|security policy|malicious request|cloudflare|akamai|imperva|incapsula|mod_security|modsecurity)")
+_LOGIN_TEXT = re.compile(r"(?i)(?:/login\b|/signin\b|/auth\b|session expired|please log in|authentication required)")
+_BLOCK_STATUSES = {403, 406, 429}
 
 _PROFILE_DEFAULTS = {
     "safe": {"baseline": 3, "rounds": 2, "max_requests": 80, "timing": False},
@@ -48,6 +54,9 @@ def _snapshot_summary(snapshot: ResponseSnapshot) -> dict[str, object]:
         "elapsed_ms": round(snapshot.elapsed * 1000, 2),
         "error": snapshot.error,
         "attempt": snapshot.attempt,
+        "final_url": snapshot.final_url,
+        "redirects": len(snapshot.redirects),
+        "body_truncated": snapshot.body_truncated,
     }
 
 
@@ -62,121 +71,73 @@ def _contexts(original_value: str, requested: str) -> list[str]:
 def _context_profile(config: RequestConfig, original_value: str, detected: str | None = None) -> dict[str, object]:
     name = config.parameter.lower()
     hints: dict[str, int] = {"numeric": 0, "quoted-string": 0, "order-by": 0, "limit-offset": 0, "unknown": 5}
-    if _NUMBER.fullmatch(original_value.strip()):
-        hints["numeric"] += 70
-    else:
-        hints["quoted-string"] += 65
-    if any(token in name for token in ("sort", "order", "orderby", "order_by")):
-        hints["order-by"] += 75
-    if any(token in name for token in ("limit", "offset", "page", "size")):
-        hints["limit-offset"] += 70
-    if detected == "numeric":
-        hints["numeric"] = max(hints["numeric"], 95)
-    elif detected == "string":
-        hints["quoted-string"] = max(hints["quoted-string"], 95)
+    if _NUMBER.fullmatch(original_value.strip()): hints["numeric"] += 70
+    else: hints["quoted-string"] += 65
+    if any(token in name for token in ("sort", "order", "orderby", "order_by")): hints["order-by"] += 75
+    if any(token in name for token in ("limit", "offset", "page", "size")): hints["limit-offset"] += 70
+    if detected == "numeric": hints["numeric"] = max(hints["numeric"], 95)
+    elif detected == "string": hints["quoted-string"] = max(hints["quoted-string"], 95)
     ordered = sorted(hints.items(), key=lambda item: item[1], reverse=True)
     return {"primary": ordered[0][0], "scores": dict(ordered)}
 
 
 def _modal_status(items: list[ResponseSnapshot]) -> int:
-    if not items:
-        return 0
-    return Counter(item.status for item in items).most_common(1)[0][0]
+    return Counter(item.status for item in items).most_common(1)[0][0] if items else 0
 
 
 def _repeatable_status(items: list[ResponseSnapshot]) -> bool:
     return bool(items) and len({item.status for item in items}) == 1
 
 
-def _boolean_score(
-    baseline: BaselineProfile,
-    true_items: list[ResponseSnapshot],
-    false_items: list[ResponseSnapshot],
-) -> tuple[int, dict[str, object]]:
+def _boolean_score(baseline: BaselineProfile, true_items: list[ResponseSnapshot], false_items: list[ResponseSnapshot]) -> tuple[int, dict[str, object]]:
     if not true_items or not false_items or any(item.status == 0 for item in true_items + false_items):
         return 0, {"network_reliable": False, "rounds": min(len(true_items), len(false_items))}
-
-    true_cluster = cluster_similarity(true_items)
-    false_cluster = cluster_similarity(false_items)
-    cross = cross_similarity(true_items, false_items)
-    within = min(true_cluster, false_cluster)
-    cluster_gap = max(0.0, within - cross)
-
-    true_base = median(similarity(item.body, baseline.representative.body) for item in true_items)
-    false_base = median(similarity(item.body, baseline.representative.body) for item in false_items)
+    true_cluster = cluster_similarity(true_items); false_cluster = cluster_similarity(false_items); cross = cross_similarity(true_items, false_items)
+    within = min(true_cluster, false_cluster); cluster_gap = max(0.0, within - cross)
+    true_base = median(snapshot_similarity(item, baseline.representative) for item in true_items)
+    false_base = median(snapshot_similarity(item, baseline.representative) for item in false_items)
     baseline_affinity = max(true_base, false_base)
-
-    true_status = _modal_status(true_items)
-    false_status = _modal_status(false_items)
+    true_status = _modal_status(true_items); false_status = _modal_status(false_items)
     status_separation = true_status != false_status and _repeatable_status(true_items) and _repeatable_status(false_items)
-
     length_deltas = [abs(a.length - b.length) for a, b in zip(true_items, false_items)]
     median_length_gap = float(median(length_deltas)) if length_deltas else 0.0
     meaningful_length_gap = median_length_gap >= max(24.0, baseline.median_length * 0.08)
-
-    content_separation = (
-        cluster_gap >= baseline.differential_margin
-        and within >= max(0.82, baseline.median_similarity - 0.12)
-        and baseline_affinity >= max(0.70, baseline.median_similarity - 0.20)
-    )
-
+    content_separation = cluster_gap >= baseline.differential_margin and within >= max(0.82, baseline.median_similarity - 0.12) and baseline_affinity >= max(0.70, baseline.median_similarity - 0.20)
     round_confirmations = 0
     for true_item, false_item in zip(true_items, false_items):
-        pair_sim = similarity(true_item.body, false_item.body)
+        pair_sim = snapshot_similarity(true_item, false_item)
         if true_item.status != false_item.status:
-            round_confirmations += 1
-            continue
-        pair_gap = abs(
-            similarity(true_item.body, baseline.representative.body)
-            - similarity(false_item.body, baseline.representative.body)
-        )
+            round_confirmations += 1; continue
+        pair_gap = abs(snapshot_similarity(true_item, baseline.representative) - snapshot_similarity(false_item, baseline.representative))
         pair_len = abs(true_item.length - false_item.length)
-        if pair_gap >= baseline.differential_margin or pair_len >= max(24.0, baseline.median_length * 0.08):
-            round_confirmations += 1
-        elif pair_sim <= max(0.60, baseline.min_similarity - baseline.differential_margin):
-            round_confirmations += 1
-
+        if pair_gap >= baseline.differential_margin or pair_len >= max(24.0, baseline.median_length * 0.08): round_confirmations += 1
+        elif pair_sim <= max(0.60, baseline.min_similarity - baseline.differential_margin): round_confirmations += 1
     if not (content_separation or status_separation or (meaningful_length_gap and round_confirmations >= 2)):
         score = min(34, round(100 * cluster_gap))
     else:
-        score = 44
-        score += min(24, round_confirmations * 8)
-        score += min(16, round(cluster_gap * 100))
-        score += 8 if baseline.stable else 0
-        score += 8 if status_separation else 0
-        score += 5 if meaningful_length_gap else 0
+        score = 44 + min(24, round_confirmations * 8) + min(16, round(cluster_gap * 100)) + (8 if baseline.stable else 0) + (8 if status_separation else 0) + (5 if meaningful_length_gap else 0)
         score = min(100, score)
-
+    blocking = sum(item.status in _BLOCK_STATUSES for item in true_items + false_items)
+    if blocking >= max(2, len(true_items)):
+        score = min(score, 49)
     evidence: dict[str, object] = {
-        "network_reliable": True,
-        "rounds": len(true_items),
-        "round_confirmations": round_confirmations,
+        "network_reliable": True, "rounds": len(true_items), "round_confirmations": round_confirmations,
         "reproducibility": round(100 * round_confirmations / max(1, len(true_items))),
-        "true_cluster_similarity": round(true_cluster, 4),
-        "false_cluster_similarity": round(false_cluster, 4),
-        "cross_cluster_similarity": round(cross, 4),
-        "cluster_gap": round(cluster_gap, 4),
-        "required_gap": round(baseline.differential_margin, 4),
-        "true_to_baseline_similarity": round(float(true_base), 4),
-        "false_to_baseline_similarity": round(float(false_base), 4),
-        "median_length_gap": round(median_length_gap, 2),
-        "true_status": true_status,
-        "false_status": false_status,
-        "status_separation": status_separation,
-        "content_separation": content_separation,
+        "true_cluster_similarity": round(true_cluster, 4), "false_cluster_similarity": round(false_cluster, 4),
+        "cross_cluster_similarity": round(cross, 4), "cluster_gap": round(cluster_gap, 4),
+        "required_gap": round(baseline.differential_margin, 4), "true_to_baseline_similarity": round(float(true_base), 4),
+        "false_to_baseline_similarity": round(float(false_base), 4), "median_length_gap": round(median_length_gap, 2),
+        "true_status": true_status, "false_status": false_status, "status_separation": status_separation,
+        "content_separation": content_separation, "blocking_responses": blocking,
     }
     return score, evidence
 
 
 def _verdict(score: int) -> str:
-    if score >= 90:
-        return "confirmed"
-    if score >= 75:
-        return "high-confidence"
-    if score >= 55:
-        return "probable"
-    if score >= 35:
-        return "possible"
+    if score >= 90: return "confirmed"
+    if score >= 75: return "high-confidence"
+    if score >= 55: return "probable"
+    if score >= 35: return "possible"
     return "no-strong-indicator"
 
 
@@ -184,291 +145,216 @@ def _dbms_profile(findings: list[Finding]) -> dict[str, float]:
     weights: dict[str, float] = defaultdict(float)
     for finding in findings:
         if finding.dbms_hint:
-            multiplier = 1.2 if finding.category == "error-based-indicator" else 1.0
-            weights[finding.dbms_hint] += max(1.0, finding.score * multiplier)
+            weights[finding.dbms_hint] += max(1.0, finding.score * (1.2 if finding.category == "error-based-indicator" else 1.0))
         for hint in finding.evidence.get("db_error_hints", []):
-            if isinstance(hint, str):
-                weights[hint] += max(1.0, finding.score * 0.35)
+            if isinstance(hint, str): weights[hint] += max(1.0, finding.score * 0.35)
     total = sum(weights.values())
-    if not total:
-        return {}
-    return {
-        name: round(weight * 100.0 / total, 1)
-        for name, weight in sorted(weights.items(), key=lambda item: item[1], reverse=True)
-    }
+    if not total: return {}
+    return {name: round(weight * 100.0 / total, 1) for name, weight in sorted(weights.items(), key=lambda item: item[1], reverse=True)}
 
 
 def _redact_url(url: str) -> str:
     try:
-        parts = urlsplit(url)
-        pairs = parse_qsl(parts.query, keep_blank_values=True)
+        parts = urlsplit(url); pairs = parse_qsl(parts.query, keep_blank_values=True)
         safe = [(key, "<redacted>" if _SECRET_NAME.search(key) else value) for key, value in pairs]
         return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(safe, doseq=True), parts.fragment))
     except ValueError:
         return url
 
 
+def _redirect_signature(snapshot: ResponseSnapshot) -> tuple[object, ...]:
+    def compact(url: str) -> tuple[str, str, int | None, str]:
+        parts = urlsplit(url)
+        return parts.scheme.lower(), (parts.hostname or "").lower(), parts.port, parts.path or "/"
+    hops = tuple((hop.status, compact(hop.location or hop.url)) for hop in snapshot.redirects)
+    return snapshot.status, compact(snapshot.final_url), hops, snapshot.redirect_outcome
+
+
+def _interference_profile(observed: list[ResponseSnapshot], baseline: BaselineProfile | None) -> dict[str, int]:
+    if not observed: return {}
+    total = max(1, len(observed)); scores: dict[str, int] = {}
+    blocked = [x for x in observed if x.status in _BLOCK_STATUSES or _WAF_TEXT.search(x.body[:6000])]
+    if blocked: scores["waf_or_edge_blocking"] = min(100, round(100 * len(blocked) / total) + 20)
+    rate = sum(x.status == 429 for x in observed)
+    if rate: scores["rate_limiting"] = min(100, 35 + round(100 * rate / total))
+    auth = sum(bool(x.status in {401, 403} or _LOGIN_TEXT.search(x.final_url) or _LOGIN_TEXT.search(x.body[:4000])) for x in observed)
+    if auth and baseline and baseline.representative.status not in {401, 403}: scores["session_or_auth_drift"] = min(100, 30 + round(100 * auth / total))
+    redirect_blocks = sum(x.redirect_outcome in {"blocked-policy", "loop", "max-redirects"} for x in observed)
+    if redirect_blocks: scores["redirect_interference"] = min(100, 30 + round(100 * redirect_blocks / total))
+    if baseline is not None:
+        baseline_signature = _redirect_signature(baseline.representative)
+        redirect_drift = sum(_redirect_signature(x) != baseline_signature for x in observed if x.status != 0)
+        if redirect_drift:
+            scores["redirect_behavior_drift"] = min(100, 20 + round(100 * redirect_drift / total))
+    truncated = sum(x.body_truncated for x in observed)
+    if truncated: scores["response_truncation"] = min(100, round(100 * truncated / total))
+    return dict(sorted(scores.items(), key=lambda item: item[1], reverse=True))
+
+
 class SQLiScanner:
     def __init__(self, client: HTTPClient | None = None) -> None:
         self.client = client or HTTPClient()
 
-    def scan(
-        self,
-        config: RequestConfig,
-        *,
-        original_value: str = "1",
-        authorized: bool = False,
-        time_probes: bool | None = None,
-        dbms: Iterable[str] | None = None,
-        context: str = "auto",
-        baseline_samples: int | None = None,
-        confirmation_rounds: int | None = None,
-        profile: str = "normal",
-        max_requests: int | None = None,
-        control: ScanControl | None = None,
-    ) -> ScanReport:
-        require_authorization(authorized)
-        validate_http_url(config.url)
-        self.client.validate_config(config, original_value)
-        if profile not in _PROFILE_DEFAULTS:
-            raise ValueError("profile must be one of: safe, normal, thorough")
+    def scan(self, config: RequestConfig, *, original_value: str = "1", authorized: bool = False,
+             time_probes: bool | None = None, dbms: Iterable[str] | None = None, context: str = "auto",
+             baseline_samples: int | None = None, confirmation_rounds: int | None = None,
+             profile: str = "normal", max_requests: int | None = None, control: ScanControl | None = None,
+             adaptive: bool = True, exhaustive: bool = False) -> ScanReport:
+        require_authorization(authorized); validate_http_url(config.url); self.client.validate_config(config, original_value)
+        if profile not in _PROFILE_DEFAULTS: raise ValueError("profile must be one of: safe, normal, thorough")
         defaults = _PROFILE_DEFAULTS[profile]
         baseline_samples = int(defaults["baseline"] if baseline_samples is None else baseline_samples)
         confirmation_rounds = int(defaults["rounds"] if confirmation_rounds is None else confirmation_rounds)
         request_budget = int(defaults["max_requests"] if max_requests is None else max_requests)
         time_probes = bool(defaults["timing"] if time_probes is None else time_probes)
-        if profile == "safe":
-            time_probes = False
-        if baseline_samples < 3 or baseline_samples > 9:
-            raise ValueError("baseline_samples must be between 3 and 9")
-        if confirmation_rounds < 2 or confirmation_rounds > 5:
-            raise ValueError("confirmation_rounds must be between 2 and 5")
-        if request_budget < 10 or request_budget > 2000:
-            raise ValueError("max_requests must be between 10 and 2000")
-
-        control = control or ScanControl()
-        errors: list[str] = []
-        findings: list[Finding] = []
-        timeline: list[RequestEvidence] = []
-        tested = 0
-        requests_sent = 0
-        stopped_early = False
+        if profile == "safe": time_probes = False
+        if baseline_samples < 3 or baseline_samples > 9: raise ValueError("baseline_samples must be between 3 and 9")
+        if confirmation_rounds < 2 or confirmation_rounds > 5: raise ValueError("confirmation_rounds must be between 2 and 5")
+        if request_budget < 10 or request_budget > 2000: raise ValueError("max_requests must be between 10 and 2000")
+        if exhaustive: adaptive = False
+        control = control or ScanControl(); self.client.sleep_callback = control.sleep
+        errors: list[str] = []; findings: list[Finding] = []; timeline: list[RequestEvidence] = []; observed: list[ResponseSnapshot] = []
+        tested = 0; requests_sent = 0; stopped_early = False; adaptive_stopped = False; scan_started = time.monotonic(); lock = threading.Lock()
+        selected_contexts = _contexts(original_value, context)
+        boolean_pairs = [probe for probe in BOOLEAN_PROBES if probe.context in selected_contexts]
+        planned = min(request_budget, baseline_samples + len(SYNTAX_PROBES) + len(boolean_pairs) * confirmation_rounds * 2 + 2 + (18 if time_probes else 0))
+        control.emit("plan", planned_requests=planned, budget=request_budget)
 
         def request(value: str, phase: str, label: str) -> ResponseSnapshot:
             nonlocal requests_sent
             control.checkpoint()
-            if requests_sent >= request_budget:
-                raise _BudgetReached("request budget reached")
-            control.emit("request-start", phase=phase, label=label, index=requests_sent + 1, budget=request_budget)
+            if time.monotonic() - scan_started >= config.max_duration: raise _BudgetReached("scan max_duration reached")
+            with lock:
+                if requests_sent >= request_budget: raise _BudgetReached("request budget reached")
+                requests_sent += 1; index = requests_sent
+            control.emit("request-start", phase=phase, label=label, index=index, budget=request_budget, planned=planned)
             response = self.client.request(config, value)
-            requests_sent += 1
-            timeline.append(
-                RequestEvidence(
-                    index=requests_sent,
-                    phase=phase,
-                    label=label,
-                    status=response.status,
-                    length=response.length,
-                    elapsed_ms=round(response.elapsed * 1000, 2),
-                    error=response.error,
-                    method=response.request_method or config.method.upper(),
-                    url=_redact_url(response.request_url or config.url),
-                    request_headers=response.request_headers,
-                    request_body=response.request_body[:20_000] if response.request_body else None,
-                    response_excerpt=redact_text_secrets(response.body[:4_000]),
-                )
-            )
-            control.emit(
-                "request-complete",
-                phase=phase,
-                label=label,
-                index=requests_sent,
-                budget=request_budget,
-                status=response.status,
-                length=response.length,
-                elapsed_ms=round(response.elapsed * 1000, 2),
-            )
-            if response.error and response.error not in errors:
-                errors.append(response.error)
+            item = RequestEvidence(index=index, phase=phase, label=label, status=response.status, length=response.length,
+                elapsed_ms=round(response.elapsed*1000,2), error=response.error, method=response.request_method or config.method.upper(),
+                url=_redact_url(response.request_url or config.url), request_headers=response.request_headers,
+                request_body=response.request_body[:20_000] if response.request_body else None,
+                response_excerpt=redact_text_secrets(response.body[:4_000]), content_type=response.content_type,
+                body_truncated=response.body_truncated, redirects=[asdict(hop) for hop in response.redirects], redirect_outcome=response.redirect_outcome)
+            with lock:
+                timeline.append(item); observed.append(response)
+                if response.error and response.error not in errors: errors.append(response.error)
+            control.emit("request-complete", phase=phase, label=label, index=index, budget=request_budget, planned=planned,
+                status=response.status, length=response.length, elapsed_ms=round(response.elapsed*1000,2), redirects=len(response.redirects))
             return response
 
         baseline: BaselineProfile | None = None
         try:
             control.emit("phase", name="baseline", status="running")
-            baselines = [request(original_value, "baseline", f"baseline-{i + 1}") for i in range(baseline_samples)]
-            usable_baselines = [item for item in baselines if item.status != 0]
-            if len(usable_baselines) < max(2, baseline_samples // 2):
-                errors.append("baseline unavailable: too many network/configuration failures")
-                stopped_early = True
-            else:
-                baseline = profile_baseline(usable_baselines)
-                control.emit("phase", name="baseline", status="complete", stability=baseline.stability_score)
-
+            baselines = [request(original_value, "baseline", f"baseline-{i+1}") for i in range(baseline_samples)]
+            usable = [item for item in baselines if item.status != 0]
+            if len(usable) < max(2, baseline_samples//2): errors.append("baseline unavailable: too many network/configuration failures"); stopped_early = True
+            else: baseline = profile_baseline(usable); control.emit("phase", name="baseline", status="complete", stability=baseline.stability_score)
             if baseline is not None:
                 baseline_error_hints = set(_db_error_hints(baseline.representative.body))
                 control.emit("phase", name="syntax", status="running")
-                for index, payload in enumerate(SYNTAX_PROBES, 1):
+                def syntax_task(args: tuple[int, str]) -> tuple[int, str, ResponseSnapshot]:
+                    idx, payload = args
+                    return idx, payload, request(original_value + payload, "syntax", f"syntax-{idx}")
+                syntax_results: list[tuple[int, str, ResponseSnapshot]] = []
+                if config.concurrency > 1:
+                    with ThreadPoolExecutor(max_workers=config.concurrency, thread_name_prefix="wsm-probe") as pool:
+                        futures = [pool.submit(syntax_task, (idx, payload)) for idx, payload in enumerate(SYNTAX_PROBES, 1)]
+                        for future in as_completed(futures): syntax_results.append(future.result())
+                    syntax_results.sort(key=lambda item: item[0])
+                else:
+                    syntax_results = [syntax_task((idx, payload)) for idx, payload in enumerate(SYNTAX_PROBES, 1)]
+                for _, payload, response in syntax_results:
                     tested += 1
-                    response = request(original_value + payload, "syntax", f"syntax-{index}")
-                    if response.status == 0:
-                        continue
-                    hints = _db_error_hints(response.body)
-                    new_hints = [hint for hint in hints if hint not in baseline_error_hints]
+                    if response.status == 0: continue
+                    hints = _db_error_hints(response.body); new_hints = [h for h in hints if h not in baseline_error_hints]
                     status_changed = response.status != baseline.representative.status and response.status >= 500
                     if new_hints or status_changed:
                         score = min(88, 58 + (15 if new_hints else 0) + (7 if baseline.stable else 0))
-                        findings.append(
-                            Finding(
-                                category="error-based-indicator",
-                                title="Database error behavior changed after SQL syntax probe",
-                                confidence=confidence_from_score(score),
-                                score=score,
-                                payload=payload,
-                                dbms_hint=new_hints[0] if new_hints else None,
-                                evidence={
-                                    "baseline": _snapshot_summary(baseline.representative),
-                                    "probe": _snapshot_summary(response),
-                                    "similarity": round(similarity(baseline.representative.body, response.body), 4),
-                                    "db_error_hints": new_hints,
-                                    "baseline_stability": baseline.stability_score,
-                                    "response_diff": unified_response_diff(baseline.representative.body, response.body),
-                                },
-                            )
-                        )
+                        findings.append(Finding(category="error-based-indicator", title="Database error behavior changed after SQL syntax probe",
+                            confidence=confidence_from_score(score), score=score, payload=payload, dbms_hint=new_hints[0] if new_hints else None,
+                            evidence={"baseline":_snapshot_summary(baseline.representative),"probe":_snapshot_summary(response),
+                                "similarity":round(snapshot_similarity(baseline.representative,response),4),"db_error_hints":new_hints,
+                                "baseline_stability":baseline.stability_score,"response_diff":unified_response_diff(baseline.representative.body,response.body)}))
                 control.emit("phase", name="syntax", status="complete")
 
-                selected_contexts = _contexts(original_value, context)
+                health = request(original_value, "health", "post-syntax-control")
+                if health.status in {401, 403} or _LOGIN_TEXT.search(health.final_url) or _LOGIN_TEXT.search(health.body[:4000]):
+                    errors.append("session health changed after syntax probes; authentication/WAF interference is possible")
+                elif snapshot_similarity(health, baseline.representative) < max(0.50, baseline.min_similarity - 0.25):
+                    errors.append("session health response drifted materially from baseline")
+
                 control.emit("phase", name="boolean", status="running")
-                for pair in (probe for probe in BOOLEAN_PROBES if probe.context in selected_contexts):
-                    true_items: list[ResponseSnapshot] = []
-                    false_items: list[ResponseSnapshot] = []
+                for pair in boolean_pairs:
+                    true_items: list[ResponseSnapshot] = []; false_items: list[ResponseSnapshot] = []
                     for round_index in range(confirmation_rounds):
                         if round_index % 2 == 0:
-                            true_items.append(request(original_value + pair.true_payload, "boolean", f"{pair.name}-true-{round_index + 1}"))
-                            false_items.append(request(original_value + pair.false_payload, "boolean", f"{pair.name}-false-{round_index + 1}"))
+                            true_items.append(request(original_value+pair.true_payload,"boolean",f"{pair.name}-true-{round_index+1}")); false_items.append(request(original_value+pair.false_payload,"boolean",f"{pair.name}-false-{round_index+1}"))
                         else:
-                            false_items.append(request(original_value + pair.false_payload, "boolean", f"{pair.name}-false-{round_index + 1}"))
-                            true_items.append(request(original_value + pair.true_payload, "boolean", f"{pair.name}-true-{round_index + 1}"))
+                            false_items.append(request(original_value+pair.false_payload,"boolean",f"{pair.name}-false-{round_index+1}")); true_items.append(request(original_value+pair.true_payload,"boolean",f"{pair.name}-true-{round_index+1}"))
                         tested += 2
-
                     score, evidence = _boolean_score(baseline, true_items, false_items)
                     if score >= 35:
-                        evidence["context"] = pair.context
-                        evidence["baseline_stability"] = baseline.stability_score
-                        evidence["true_samples"] = [_snapshot_summary(item) for item in true_items]
-                        evidence["false_samples"] = [_snapshot_summary(item) for item in false_items]
-                        if true_items and false_items:
-                            evidence["response_diff"] = unified_response_diff(true_items[0].body, false_items[0].body)
-                        findings.append(
-                            Finding(
-                                category="boolean-based-indicator",
-                                title=f"Repeatable true/false SQL response separation ({pair.name})",
-                                confidence=confidence_from_score(score),
-                                score=score,
-                                payload=f"TRUE: {pair.true_payload} | FALSE: {pair.false_payload}",
-                                evidence=evidence,
-                            )
-                        )
+                        evidence["context"] = pair.context; evidence["baseline_stability"] = baseline.stability_score
+                        evidence["true_samples"] = [_snapshot_summary(item) for item in true_items]; evidence["false_samples"] = [_snapshot_summary(item) for item in false_items]
+                        if true_items and false_items: evidence["response_diff"] = unified_response_diff(true_items[0].body,false_items[0].body)
+                        finding = Finding(category="boolean-based-indicator", title=f"Repeatable true/false SQL response separation ({pair.name})",
+                            confidence=confidence_from_score(score), score=score, payload=f"TRUE: {pair.true_payload} | FALSE: {pair.false_payload}", evidence=evidence)
+                        findings.append(finding)
+                        if adaptive and score >= 90 and int(evidence.get("reproducibility",0)) >= 100:
+                            adaptive_stopped = True; control.emit("adaptive-stop", reason="confirmed boolean oracle", score=score); break
                 control.emit("phase", name="boolean", status="complete")
+                if not adaptive_stopped:
+                    health2 = request(original_value,"health","post-boolean-control")
+                    if health2.status in {401,403} or _LOGIN_TEXT.search(health2.final_url) or _LOGIN_TEXT.search(health2.body[:4000]):
+                        errors.append("session health changed after boolean probes; authentication/WAF interference is possible")
 
-                if time_probes:
+                if time_probes and not adaptive_stopped:
                     current_profile = _dbms_profile(findings)
-                    if dbms:
-                        selected_dbms = list(dbms)
-                    elif current_profile and next(iter(current_profile.values())) >= 65:
-                        selected_dbms = [next(iter(current_profile.keys()))]
-                    else:
-                        selected_dbms = list(TIME_PROBES.keys())
+                    if dbms: selected_dbms = list(dbms)
+                    elif current_profile and next(iter(current_profile.values())) >= 65: selected_dbms = [next(iter(current_profile.keys()))]
+                    else: selected_dbms = list(TIME_PROBES.keys())
                     selected_dbms = [name for name in selected_dbms if name in TIME_PROBES]
                     control.emit("phase", name="timing", status="running", dbms=selected_dbms)
                     for name in selected_dbms:
-                        payload = TIME_PROBES[name]
-                        controls: list[ResponseSnapshot] = []
-                        probes: list[ResponseSnapshot] = []
+                        payload = TIME_PROBES[name]; controls: list[ResponseSnapshot] = []; probes: list[ResponseSnapshot] = []
                         for round_index in range(3):
-                            if round_index % 2 == 0:
-                                controls.append(request(original_value, "timing", f"{name}-control-{round_index + 1}"))
-                                probes.append(request(original_value + payload, "timing", f"{name}-probe-{round_index + 1}"))
+                            if round_index%2==0:
+                                controls.append(request(original_value,"timing",f"{name}-control-{round_index+1}")); probes.append(request(original_value+payload,"timing",f"{name}-probe-{round_index+1}"))
                             else:
-                                probes.append(request(original_value + payload, "timing", f"{name}-probe-{round_index + 1}"))
-                                controls.append(request(original_value, "timing", f"{name}-control-{round_index + 1}"))
+                                probes.append(request(original_value+payload,"timing",f"{name}-probe-{round_index+1}")); controls.append(request(original_value,"timing",f"{name}-control-{round_index+1}"))
                             tested += 2
-                        if any(item.status == 0 for item in controls + probes):
-                            continue
-                        deltas = [probe.elapsed - control.elapsed for probe, control in zip(probes, controls)]
-                        threshold = max(1.25, baseline.elapsed_mad * 8.0 + 0.25)
-                        confirmations = sum(delta >= threshold for delta in deltas)
-                        median_delta = float(median(deltas))
-                        if confirmations >= 2 and median_delta >= threshold:
-                            score = min(92, 55 + confirmations * 9 + (8 if baseline.stable else 0))
-                            findings.append(
-                                Finding(
-                                    category="time-based-indicator",
-                                    title=f"Repeated response delay consistent with a {name} timing probe",
-                                    confidence=confidence_from_score(score),
-                                    score=score,
-                                    payload=payload,
-                                    dbms_hint=name,
-                                    evidence={
-                                        "rounds": 3,
-                                        "confirmations": confirmations,
-                                        "reproducibility": round(100 * confirmations / 3),
-                                        "threshold_ms": round(threshold * 1000, 2),
-                                        "median_delta_ms": round(median_delta * 1000, 2),
-                                        "deltas_ms": [round(delta * 1000, 2) for delta in deltas],
-                                        "control_ms": [round(item.elapsed * 1000, 2) for item in controls],
-                                        "probe_ms": [round(item.elapsed * 1000, 2) for item in probes],
-                                        "baseline_mad_ms": round(baseline.elapsed_mad * 1000, 2),
-                                    },
-                                )
-                            )
+                        if any(item.status==0 for item in controls+probes): continue
+                        deltas=[probe.elapsed-control_item.elapsed for probe,control_item in zip(probes,controls)]; threshold=max(1.25,baseline.elapsed_mad*8.0+0.25)
+                        confirmations=sum(delta>=threshold for delta in deltas); median_delta=float(median(deltas))
+                        if confirmations>=2 and median_delta>=threshold:
+                            score=min(92,55+confirmations*9+(8 if baseline.stable else 0))
+                            findings.append(Finding(category="time-based-indicator", title=f"Repeated response delay consistent with a {name} timing probe",
+                                confidence=confidence_from_score(score), score=score, payload=payload, dbms_hint=name,
+                                evidence={"rounds":3,"confirmations":confirmations,"reproducibility":round(100*confirmations/3),
+                                    "threshold_ms":round(threshold*1000,2),"median_delta_ms":round(median_delta*1000,2),
+                                    "deltas_ms":[round(d*1000,2) for d in deltas],"control_ms":[round(x.elapsed*1000,2) for x in controls],
+                                    "probe_ms":[round(x.elapsed*1000,2) for x in probes],"baseline_mad_ms":round(baseline.elapsed_mad*1000,2)}))
                     control.emit("phase", name="timing", status="complete")
         except (_BudgetReached, ScanCancelled) as exc:
             stopped_early = True
-            if str(exc) and str(exc) not in errors:
-                errors.append(str(exc))
+            if str(exc) and str(exc) not in errors: errors.append(str(exc))
             control.emit("stopped", reason=str(exc))
 
         findings.sort(key=lambda finding: finding.score, reverse=True)
-        confidence_score = findings[0].score if findings else 0
-        detected_context = next(
-            (
-                str(finding.evidence["context"])
-                for finding in findings
-                if finding.category == "boolean-based-indicator" and "context" in finding.evidence
-            ),
-            None,
-        )
-        reproducibility = max(
-            (int(finding.evidence.get("reproducibility", 0)) for finding in findings),
-            default=0,
-        )
-        baseline_dict = baseline.to_dict() if baseline else {
-            "sample_count": requests_sent,
-            "stability_score": 0,
-            "stable": False,
-            "status": 0,
-        }
-        report = ScanReport(
-            target=_redact_url(config.url),
-            method=config.method.upper(),
-            parameter=config.parameter,
-            baseline=baseline_dict,
-            findings=findings,
-            tested_payloads=tested,
-            confidence_score=confidence_score,
-            verdict=_verdict(confidence_score),
-            detected_context=detected_context,
-            dbms_profile=_dbms_profile(findings),
-            errors=errors,
-            reproducibility=reproducibility,
-            injection_location=config.location,
-            requests_sent=requests_sent,
-            request_budget=request_budget,
-            timeline=timeline,
-            profile=profile,
-            stopped_early=stopped_early,
-            context_profile=_context_profile(config, original_value, detected_context),
-        )
+        interference = _interference_profile(observed, baseline)
+        if findings and max(interference.get("waf_or_edge_blocking",0), interference.get("session_or_auth_drift",0)) >= 75:
+            for finding in findings:
+                if finding.category == "boolean-based-indicator" and not finding.dbms_hint:
+                    finding.score = min(finding.score, 69); finding.confidence = confidence_from_score(finding.score)
+        findings.sort(key=lambda finding: finding.score, reverse=True)
+        confidence_score=findings[0].score if findings else 0
+        detected_context=next((str(f.evidence["context"]) for f in findings if f.category=="boolean-based-indicator" and "context" in f.evidence),None)
+        reproducibility=max((int(f.evidence.get("reproducibility",0)) for f in findings),default=0)
+        baseline_dict=baseline.to_dict() if baseline else {"sample_count":requests_sent,"stability_score":0,"stable":False,"status":0}
+        report=ScanReport(target=_redact_url(config.url),method=config.method.upper(),parameter=config.parameter,baseline=baseline_dict,
+            findings=findings,tested_payloads=tested,confidence_score=confidence_score,verdict=_verdict(confidence_score),detected_context=detected_context,
+            dbms_profile=_dbms_profile(findings),errors=errors,reproducibility=reproducibility,injection_location=config.location,
+            requests_sent=requests_sent,request_budget=request_budget,timeline=sorted(timeline,key=lambda x:x.index),profile=profile,stopped_early=stopped_early,
+            context_profile=_context_profile(config,original_value,detected_context),interference_profile=interference,planned_requests=planned,adaptive_stopped=adaptive_stopped)
         control.emit("complete", verdict=report.verdict, confidence=report.confidence_score, requests=requests_sent)
         return report

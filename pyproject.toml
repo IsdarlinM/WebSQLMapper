@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "websqlmapper"
-version = "0.3.0"
-description = "Adaptive authorized SQL injection detection with a professional request engine and private-lab SQLite mapping."
+version = "0.4.0"
+description = "Adaptive authorized SQL injection detection with robust redirects, sessions, job streaming, and private-lab SQLite mapping."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -32,4 +32,4 @@ websqlmapper = "websqlmapper.cli:main"
 packages = ["websqlmapper"]
 
 [tool.setuptools.package-data]
-websqlmapper = ["static/*.html", "static/*.css", "static/*.js"]
+websqlmapper = ["static/*.html", "static/*.css", "static/*.js", "static/*.webmanifest"]

@@ -37,6 +37,16 @@ class ScanControl:
                 raise ScanCancelled("scan cancelled")
             time.sleep(0.05)
 
+    def sleep(self, seconds: float) -> None:
+        """Interruptible sleep used by pacing/backoff so Stop remains responsive."""
+        end = time.monotonic() + max(0.0, seconds)
+        while True:
+            self.checkpoint()
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.05, remaining))
+
     def emit(self, event: str, **payload: object) -> None:
         if self.progress:
             self.progress({"event": event, **payload})

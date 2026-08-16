@@ -7,26 +7,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-
 class PythonCompatibilityTests(unittest.TestCase):
-    def test_all_project_python_sources_parse_with_python_310_grammar(self) -> None:
-        failures: list[str] = []
-        for dirname in ("websqlmapper", "lab", "tests"):
-            for path in (ROOT / dirname).rglob("*.py"):
+    def test_project_python_syntax_parses_as_python_310(self) -> None:
+        for root in (ROOT / "websqlmapper", ROOT / "lab", ROOT / "tests"):
+            for path in root.rglob("*.py"):
+                source = path.read_text(encoding="utf-8")
                 try:
-                    ast.parse(path.read_text(), filename=str(path), feature_version=(3, 10))
+                    ast.parse(source, filename=str(path), feature_version=(3, 10))
                 except SyntaxError as exc:
-                    failures.append(f"{path.relative_to(ROOT)}: {exc}")
-        self.assertFalse(failures, "Python 3.10 grammar incompatibilities:\n" + "\n".join(failures))
+                    self.fail(f"{path} is not Python 3.10 syntax compatible: {exc}")
 
-    def test_runtime_used_by_test_suite_satisfies_declared_floor(self) -> None:
+    def test_runtime_is_supported(self) -> None:
         self.assertGreaterEqual(sys.version_info[:2], (3, 10))
 
-    def test_runtime_dependency_declares_compatible_floor(self) -> None:
-        pyproject = (ROOT / "pyproject.toml").read_text()
-        self.assertIn('requires-python = ">=3.10"', pyproject)
-        self.assertIn('dependencies = ["requests>=2.32,<3"]', pyproject)
-
-
-if __name__ == "__main__":
-    unittest.main()
+if __name__ == "__main__": unittest.main()

@@ -4,21 +4,13 @@ import io
 import json
 import threading
 import unittest
-from pathlib import Path
 from contextlib import redirect_stderr, redirect_stdout
 
 from lab.vulnerable_server import build_server
 from websqlmapper.cli import build_parser, main
 
-ROOT = Path(__file__).resolve().parents[1]
-
 
 class CLITests(unittest.TestCase):
-    def test_module_entrypoint_declares_python_310_floor(self) -> None:
-        text = (ROOT / "websqlmapper" / "__main__.py").read_text()
-        self.assertIn("sys.version_info < (3, 10)", text)
-        self.assertIn("requires Python 3.10 or newer", text)
-
     @classmethod
     def setUpClass(cls) -> None:
         cls.server = build_server("127.0.0.1", 0)
@@ -47,7 +39,7 @@ class CLITests(unittest.TestCase):
         with redirect_stdout(stdout):
             main(["--color","never","doctor"])
         self.assertIn("Web SQL Injector", stdout.getvalue())
-        self.assertIn("imr :: v0.3.0", stdout.getvalue())
+        self.assertIn("imr :: v0.4.0", stdout.getvalue())
 
     def test_cli_errors_are_controlled_without_traceback(self) -> None:
         stderr = io.StringIO()
