@@ -9,6 +9,9 @@ let requestCount = 0;
 let plannedRequests = null;
 let selectedEvidence = null;
 let selectedFinding = null;
+let serverInfo = null;
+let consoleAccessReady = true;
+let lastOperationalState = "idle";
 const phaseStates = new Map();
 
 function token() { return $("web-token").value.trim(); }
@@ -16,6 +19,10 @@ function apiHeaders() { const h={"Content-Type":"application/json"}; if (token()
 function eventUrl(jobId) { const t=token(); return `/api/jobs/${jobId}/events${t?`?token=${encodeURIComponent(t)}`:""}`; }
 function numberOrNull(id){const raw=$(id).value.trim();return raw===""?null:Number(raw);}
 function jsonField(id,fallback){const raw=$(id).value.trim();if(!raw)return fallback;return JSON.parse(raw);}
+async function copyText(text){
+  if(navigator.clipboard?.writeText){try{await navigator.clipboard.writeText(text);return true;}catch(_){} }
+  try{const area=document.createElement("textarea");area.value=text;area.setAttribute("readonly","");area.style.position="fixed";area.style.opacity="0";document.body.appendChild(area);area.select();const ok=document.execCommand("copy");area.remove();return ok;}catch(_){return false;}
+}
 
 function objectFromEditor(editorId){
   const out={};
@@ -49,15 +56,15 @@ function configPayload(){
 }
 
 function setUiState(state){
-  $("state").textContent=state;const active=["queued","running","paused","cancelling","mapping"].includes(state);
-  $("scan-btn").disabled=active;$("map-btn").disabled=active;$("parse-btn").disabled=active;$("discover-btn").disabled=active;
-  $("pause-btn").disabled=state!=="running";$("resume-btn").disabled=state!=="paused";$("stop-btn").disabled=!active;$("mobile-run").disabled=active;$("mobile-stop").disabled=!active;
+  $("state").textContent=state;if(!["locked","error"].includes(state))lastOperationalState=state;const active=["queued","running","paused","cancelling","mapping"].includes(state);const blocked=!consoleAccessReady;
+  $("scan-btn").disabled=active||blocked;$("map-btn").disabled=active||blocked;$("parse-btn").disabled=active||blocked;$("discover-btn").disabled=active||blocked;
+  $("pause-btn").disabled=state!=="running"||blocked;$("resume-btn").disabled=state!=="paused"||blocked;$("stop-btn").disabled=!active||blocked;$("mobile-run").disabled=active||blocked;$("mobile-map").disabled=active||blocked;$("mobile-pause").disabled=!(["running","paused"].includes(state))||blocked;$("mobile-pause").textContent=state==="paused"?"Resume":"Pause";$("mobile-stop").disabled=!active||blocked;
 }
 function showError(error){setUiState("error");$("summary").textContent=error instanceof Error?error.message:String(error);}
-async function postJSON(url,payload={}){const response=await fetch(url,{method:"POST",headers:apiHeaders(),body:JSON.stringify(payload)});const body=await response.json().catch(()=>({error:`HTTP ${response.status}`}));if(!response.ok)throw new Error(body.error||`HTTP ${response.status}`);return body;}
-async function getJSON(url){const h={};if(token())h["X-WebSQLMapper-Token"]=token();const response=await fetch(url,{headers:h});const body=await response.json().catch(()=>({error:`HTTP ${response.status}`}));if(!response.ok)throw new Error(body.error||`HTTP ${response.status}`);return body;}
+async function postJSON(url,payload={}){const response=await fetch(url,{method:"POST",headers:apiHeaders(),body:JSON.stringify(payload)});const body=await response.json().catch(()=>({error:`HTTP ${response.status}`}));if(response.status===401){lockConsole(body.error||"Remote console token is invalid or missing");throw new Error(body.error||"Remote console authentication required");}if(!response.ok)throw new Error(body.error||`HTTP ${response.status}`);return body;}
+async function getJSON(url){const h={};if(token())h["X-WebSQLMapper-Token"]=token();const response=await fetch(url,{headers:h});const body=await response.json().catch(()=>({error:`HTTP ${response.status}`}));if(response.status===401){lockConsole(body.error||"Remote console token is invalid or missing");throw new Error(body.error||"Remote console authentication required");}if(!response.ok)throw new Error(body.error||`HTTP ${response.status}`);return body;}
 
-function resetResults(){requestCount=0;plannedRequests=null;lastResult=null;selectedEvidence=null;selectedFinding=null;phaseStates.clear();$("timeline").textContent="";$("findings").className="finding-list empty";$("findings").textContent="No findings yet.";$("finding-count").textContent="0";for(const id of ["metric-confidence","metric-repro","metric-dbms","metric-interference"])$(id).textContent="—";$("metric-requests").textContent="0";$("progress-text").textContent="0 / —";$("progress").style.width="0%";$("phases").textContent="";$("output").textContent="{}";$("inspector-output").textContent="Select a finding or timeline request.";}
+function resetResults(){requestCount=0;plannedRequests=null;lastResult=null;selectedEvidence=null;selectedFinding=null;phaseStates.clear();$("timeline").textContent="";$("findings").className="finding-list empty";$("findings").innerHTML=`<div class="empty-state"><span class="empty-icon">◎</span><strong>No findings yet</strong><span>Run a scan to populate confirmed evidence, response differences and DBMS signals.</span></div>`;$("finding-count").textContent="0";for(const id of ["metric-confidence","metric-repro","metric-dbms","metric-interference"])$(id).textContent="—";$("metric-requests").textContent="0";$("progress-text").textContent="0 / —";$("progress").style.width="0%";$("phases").textContent="";$("output").textContent="{}";$("inspector-output").textContent="Select a finding or timeline request.";}
 function renderPhases(){$("phases").textContent="";for(const [name,status] of phaseStates.entries()){const node=document.createElement("span");node.className=`phase ${status==="complete"?"done":"live"}`;node.textContent=`${name} · ${status}`;$("phases").appendChild(node);}}
 function updateProgress(){const denom=plannedRequests||null;$("progress-text").textContent=`${requestCount} / ${denom||"—"}`;$("metric-requests").textContent=`${requestCount}${denom?`/${denom}`:""}`;const pct=denom?Math.min(98,requestCount*100/denom):Math.min(95,requestCount);$("progress").style.width=`${pct}%`;}
 
@@ -82,6 +89,36 @@ function renderResult(result,kind="scan"){
   renderTimeline();
 }
 
+function setConnectionState(kind,label){
+  const node=$("connection-indicator");node.className=`connection-indicator ${kind}`;$("connection-label").textContent=label;
+}
+function lockConsole(message="Enter the access token printed by the WebSQLMapper server."){
+  consoleAccessReady=false;$("remote-access").hidden=false;$("remote-access").classList.remove("connected");$("access-title").textContent="Remote console locked";$("access-message").textContent=message;$("connect-console").textContent="Connect";setConnectionState("locked","authentication required");setUiState("locked");
+}
+function unlockConsole(){
+  consoleAccessReady=true;$("remote-access").hidden=!serverInfo?.remote;$("remote-access").classList.add("connected");$("access-title").textContent="Remote console connected";const directHttp=serverInfo?.remote&&location.protocol==="http:";$("access-message").textContent=directHttp?"Authenticated over HTTP. Use this mode only on a trusted LAN/VPN, or place the console behind HTTPS.":"This browser session is authenticated. The access token remains only in session storage.";$("connect-console").textContent="Connected";setConnectionState("connected",serverInfo?.remote?"remote connected":"local console");setUiState(currentJob?lastOperationalState:"idle");
+}
+function consumeTokenFragment(){
+  if(!location.hash)return;try{const params=new URLSearchParams(location.hash.slice(1));const fragmentToken=params.get("token");if(fragmentToken){$("web-token").value=fragmentToken;safeStorageSet("websqlmapper-token",fragmentToken);history.replaceState(null,"",location.pathname+location.search);}}catch(_){}
+}
+async function connectConsole(){
+  if(!serverInfo)return bootstrapConsole();
+  if(serverInfo?.token_required&&!token()){lockConsole("A WebSQLMapper access token is required.");return false;}
+  try{await getJSON("/api/jobs");safeStorageSet("websqlmapper-token",token());unlockConsole();await refreshTemplates();if(currentJob)openEventStream();return true;}catch(error){lockConsole(error.message||"Unable to authenticate remote console.");return false;}
+}
+function forgetConsole(){safeStorageSet("websqlmapper-token","");$("web-token").value="";if(serverInfo?.token_required)lockConsole("Token removed from this browser session.");}
+async function bootstrapConsole(){
+  try{
+    const response=await fetch("/api/health",{cache:"no-store"});if(!response.ok)throw new Error(`health check failed: HTTP ${response.status}`);serverInfo=await response.json();$("server-mode").textContent=serverInfo.remote?"remote":"local";$("connect-console").textContent="Connect";consumeTokenFragment();
+    if(serverInfo.token_required){$("remote-access").hidden=false;if(token())await connectConsole();else lockConsole();}
+    else{consoleAccessReady=true;$("remote-access").hidden=true;setConnectionState("connected","local console");setUiState("idle");await refreshTemplates();}
+  }catch(error){serverInfo=null;consoleAccessReady=false;$("remote-access").hidden=false;$("remote-access").classList.remove("connected");$("access-title").textContent="Web console unavailable";$("access-message").textContent=`Health check failed: ${error.message}`;$("connect-console").textContent="Retry";setConnectionState("error","server unavailable");$("server-mode").textContent="offline";$("summary").textContent=`Web console health check failed: ${error.message}`;setUiState("error");}
+}
+function syncContext(){
+  const raw=$("url").value.trim();let target=raw||"not configured";try{const u=new URL(raw);target=`${u.hostname}${u.port?`:${u.port}`:""}${u.pathname||"/"}`;}catch(_){}
+  $("context-target").textContent=target;$("context-method").textContent=$("method").value;$("context-injection").textContent=`${$("location").value}:${$("parameter").value||"—"}`;$("context-value").textContent=`value ${$("original-value").value||"—"}`;$("context-profile").textContent=$("profile").value;$("context-redirect").textContent=`redirects: ${$("redirect-policy").value}`;
+}
+
 async function startJob(kind){
   try{resetResults();const payload=configPayload();if(!payload.url)throw new Error("URL is required");if(!payload.parameter)throw new Error("Injection parameter/path is required");payload.kind=kind;setUiState("queued");$("summary").textContent=`Starting ${kind}…`;const started=await postJSON("/api/jobs",payload);currentJob=started.job_id;lastJobId=currentJob;currentJobKind=kind;setUiState("running");openEventStream();}
   catch(error){showError(error);}
@@ -91,12 +128,12 @@ function openEventStream(){if(!currentJob)return;if(eventSource)eventSource.clos
 }
 async function jobAction(action){if(!currentJob)return;try{const body=await postJSON(`/api/jobs/${currentJob}/${action}`,{});setUiState(body.status);}catch(error){showError(error);}}
 
-function renderPoints(points){const box=$("injection-points");box.textContent="";if(!points?.length){box.innerHTML='<p class="empty">No existing injection points discovered.</p>';return;}for(const point of points){const btn=document.createElement("button");btn.type="button";btn.className="point";const title=document.createElement("strong");title.textContent=`${point.location}:${point.parameter}`;const value=document.createElement("span");value.textContent=point.sensitive?"<redacted>":String(point.value||"").slice(0,80);btn.append(title,value);btn.addEventListener("click",()=>{$("location").value=point.location;$("parameter").value=point.parameter;if(!point.sensitive&&point.value!=="<redacted>")$("original-value").value=point.value||"1";});box.appendChild(btn);}}
+function renderPoints(points){const box=$("injection-points");box.textContent="";if(!points?.length){box.innerHTML='<p class="empty">No existing injection points discovered.</p>';return;}for(const point of points){const btn=document.createElement("button");btn.type="button";btn.className="point";const title=document.createElement("strong");title.textContent=`${point.location}:${point.parameter}`;const value=document.createElement("span");value.textContent=point.sensitive?"<redacted>":String(point.value||"").slice(0,80);btn.append(title,value);btn.addEventListener("click",()=>{$("location").value=point.location;$("parameter").value=point.parameter;if(!point.sensitive&&point.value!=="<redacted>")$("original-value").value=point.value||"1";syncContext();});box.appendChild(btn);}}
 async function discover(){try{const body=await postJSON("/api/discover",configPayload());renderPoints(body.injection_points);$("summary").textContent=`Discovered ${body.injection_points.length} request input point(s) without sending target traffic.`;}catch(error){showError(error);}}
 async function parseImport(){try{const body=await postJSON("/api/parse",{kind:$("import-kind").value,scheme:$("import-scheme").value,text:$("import-text").value});applyRequest(body.request);renderPoints(body.injection_points||[]);$("summary").textContent=`Imported ${body.source} request and discovered ${(body.injection_points||[]).length} input point(s).`;}catch(error){showError(error);}}
-function applyRequest(r){$("url").value=r.url||"";$("method").value=r.method||"GET";$("body-mode").value=r.body_mode||"auto";$("data").value=JSON.stringify(r.data??{},null,2);$("raw-body").value=r.raw_body||"";$("headers").value=JSON.stringify(r.headers||{},null,2);$("cookies").value=JSON.stringify(r.cookies||{},null,2);fillKvEditor("header-editor",r.headers||{});fillKvEditor("cookie-editor",r.cookies||{});$("proxy").value=r.proxy||"";$("verify-tls").checked=r.verify_tls!==false;$("ca-bundle").value=r.ca_bundle||"";$("client-cert").value=r.client_cert||"";$("client-key").value=r.client_key||"";$("redirect-policy").value=r.redirect_policy||(r.follow_redirects?"any":"never");$("max-redirects").value=r.max_redirects??5;$("cookie-mode").value=r.cookie_mode||"static";$("retry-policy").value=r.retry_policy||"safe";$("auth-user").value=r.auth_username||"";$("auth-pass").value=r.auth_password||"";$("bearer").value=r.bearer_token||"";}
+function applyRequest(r){$("url").value=r.url||"";$("method").value=r.method||"GET";$("body-mode").value=r.body_mode||"auto";$("data").value=JSON.stringify(r.data??{},null,2);$("raw-body").value=r.raw_body||"";$("headers").value=JSON.stringify(r.headers||{},null,2);$("cookies").value=JSON.stringify(r.cookies||{},null,2);fillKvEditor("header-editor",r.headers||{});fillKvEditor("cookie-editor",r.cookies||{});$("proxy").value=r.proxy||"";$("verify-tls").checked=r.verify_tls!==false;$("ca-bundle").value=r.ca_bundle||"";$("client-cert").value=r.client_cert||"";$("client-key").value=r.client_key||"";$("redirect-policy").value=r.redirect_policy||(r.follow_redirects?"any":"never");$("max-redirects").value=r.max_redirects??5;$("cookie-mode").value=r.cookie_mode||"static";$("retry-policy").value=r.retry_policy||"safe";$("auth-user").value=r.auth_username||"";$("auth-pass").value=r.auth_password||"";$("bearer").value=r.bearer_token||"";syncContext();}
 
-async function refreshTemplates(){try{const body=await getJSON("/api/templates");const select=$("template-list");select.innerHTML='<option value="">No template selected</option>';for(const name of body.templates){const o=document.createElement("option");o.value=name;o.textContent=name;select.appendChild(o);}}catch(error){showError(error);}}
+async function refreshTemplates(){if(!consoleAccessReady)return;try{const body=await getJSON("/api/templates");const select=$("template-list");select.innerHTML='<option value="">No template selected</option>';for(const name of body.templates){const o=document.createElement("option");o.value=name;o.textContent=name;select.appendChild(o);}}catch(error){if(consoleAccessReady)showError(error);}}
 async function loadTemplate(){const name=$("template-list").value;if(!name)return;try{const body=await getJSON(`/api/templates/${encodeURIComponent(name)}`);applyRequest(body.request);await discover();}catch(error){showError(error);}}
 async function saveTemplate(){const name=$("template-name").value.trim();if(!name)return showError(new Error("Template name is required"));try{await postJSON("/api/templates/save",{name,request:configPayload()});await refreshTemplates();$("template-list").value=name;$("summary").textContent=`Saved redacted template ${name}.`;}catch(error){showError(error);}}
 async function deleteTemplateAction(){const name=$("template-list").value;if(!name)return;try{await postJSON("/api/templates/delete",{name});await refreshTemplates();$("summary").textContent=`Deleted template ${name}.`;}catch(error){showError(error);}}
@@ -105,13 +142,15 @@ async function downloadReport(format){if(!lastJobId||currentJobKind==="map"){sho
 
 function initTabs(){document.querySelectorAll(".config-tab").forEach((btn)=>btn.addEventListener("click",()=>{document.querySelectorAll(".config-tab").forEach((b)=>b.classList.toggle("active",b===btn));document.querySelectorAll(".tab-panel").forEach((p)=>p.classList.toggle("active",p.dataset.panel===btn.dataset.tab));}));document.querySelectorAll(".result-tab").forEach((btn)=>btn.addEventListener("click",()=>selectResultTab(btn.dataset.resultTab)));document.querySelectorAll(".inspector-tab").forEach((btn)=>btn.addEventListener("click",()=>selectInspector(btn.dataset.inspector)));}
 
-$("scan-btn").addEventListener("click",()=>startJob("scan"));$("map-btn").addEventListener("click",()=>startJob("map"));$("mobile-run").addEventListener("click",()=>startJob("scan"));$("mobile-stop").addEventListener("click",()=>jobAction("cancel"));$("parse-btn").addEventListener("click",parseImport);$("discover-btn").addEventListener("click",discover);$("pause-btn").addEventListener("click",()=>jobAction("pause"));$("resume-btn").addEventListener("click",()=>jobAction("resume"));$("stop-btn").addEventListener("click",()=>jobAction("cancel"));
+$("scan-btn").addEventListener("click",()=>startJob("scan"));$("map-btn").addEventListener("click",()=>startJob("map"));$("mobile-run").addEventListener("click",()=>startJob("scan"));$("mobile-map").addEventListener("click",()=>startJob("map"));$("mobile-pause").addEventListener("click",()=>jobAction($("state").textContent.trim().toLowerCase()==="paused"?"resume":"pause"));$("mobile-stop").addEventListener("click",()=>jobAction("cancel"));$("parse-btn").addEventListener("click",parseImport);$("discover-btn").addEventListener("click",discover);$("pause-btn").addEventListener("click",()=>jobAction("pause"));$("resume-btn").addEventListener("click",()=>jobAction("resume"));$("stop-btn").addEventListener("click",()=>jobAction("cancel"));
 $("add-header").addEventListener("click",()=>addKvRow("header-editor"));$("add-cookie").addEventListener("click",()=>addKvRow("cookie-editor"));$("headers").addEventListener("change",syncEditorsFromAdvanced);$("cookies").addEventListener("change",syncEditorsFromAdvanced);
 $("refresh-templates").addEventListener("click",refreshTemplates);$("load-template").addEventListener("click",loadTemplate);$("save-template").addEventListener("click",saveTemplate);$("delete-template").addEventListener("click",deleteTemplateAction);
 for(const id of ["timeline-phase","timeline-status","timeline-search"])$(id).addEventListener(id==="timeline-search"?"input":"change",renderTimeline);
-$("copy-btn").addEventListener("click",async()=>{try{await navigator.clipboard.writeText(JSON.stringify(lastResult||{},null,2));$("copy-btn").textContent="Copied";setTimeout(()=>$("copy-btn").textContent="Copy JSON",1200);}catch(_){$("copy-btn").textContent="Copy unavailable";}});document.querySelectorAll(".report-btn").forEach((b)=>b.addEventListener("click",()=>downloadReport(b.dataset.format)));
+$("copy-btn").addEventListener("click",async()=>{const ok=await copyText(JSON.stringify(lastResult||{},null,2));$("copy-btn").textContent=ok?"Copied":"Copy unavailable";setTimeout(()=>$("copy-btn").textContent="Copy JSON",1200);});document.querySelectorAll(".report-btn").forEach((b)=>b.addEventListener("click",()=>downloadReport(b.dataset.format)));
 function safeStorageGet(key){try{return window.sessionStorage?sessionStorage.getItem(key):null;}catch(_){return null;}}
 function safeStorageSet(key,value){try{if(!window.sessionStorage)return;if(value)sessionStorage.setItem(key,value);else sessionStorage.removeItem(key);}catch(_){} }
-$("web-token").value=safeStorageGet("websqlmapper-token")||"";$("web-token").addEventListener("change",()=>{safeStorageSet("websqlmapper-token",token());refreshTemplates();});
-initTabs();fillKvEditor("header-editor",{});fillKvEditor("cookie-editor",{});setUiState("idle");refreshTemplates();
+$("web-token").value=safeStorageGet("websqlmapper-token")||"";$("web-token").addEventListener("keydown",(event)=>{if(event.key==="Enter")connectConsole();});$("connect-console").addEventListener("click",connectConsole);$("forget-console").addEventListener("click",forgetConsole);
+for(const id of ["url","method","location","parameter","original-value","profile","redirect-policy"])$(id).addEventListener(id==="url"||id==="parameter"||id==="original-value"?"input":"change",syncContext);
+$("copy-target").addEventListener("click",async()=>{const ok=await copyText($("url").value);$("copy-target").textContent=ok?"Copied":"Copy unavailable";setTimeout(()=>$("copy-target").textContent="Copy target",1000);});
+initTabs();fillKvEditor("header-editor",{});fillKvEditor("cookie-editor",{});syncContext();setUiState("idle");bootstrapConsole();
 if("serviceWorker" in navigator) navigator.serviceWorker.register("/service-worker.js").catch(()=>{});

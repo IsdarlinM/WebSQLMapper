@@ -1,52 +1,35 @@
 # WebSQLMapper
 
-**WebSQLMapper** is a Python 3.10+ toolkit for **authorized SQL injection validation**. Version 0.4.1 focuses on robustness, request fidelity, redirect/session awareness, lower processing overhead, resilient Web jobs, and a more usable desktop/mobile workspace.
+**WebSQLMapper** is a Python **3.10+** toolkit for authorized SQL injection validation. Version **0.4.2** focuses on a professional Web workspace, reliable remote-console operation, request fidelity, redirect/session awareness, and reproducible differential evidence.
 
 ```text
 Web SQL Injector
-imr :: v0.4.1
+imr :: v0.4.2
 ```
 
-> Use WebSQLMapper only on systems you own or have explicit authorization to test. Automated database reconstruction remains restricted to private/loopback lab targets.
+> Use WebSQLMapper only on systems you own or are explicitly authorized to test. Automated database reconstruction remains restricted to private/loopback lab targets.
 
-## v0.4.1 highlights
+## Highlights
 
-- Redirect engine with `never`, `same-origin`, `same-host`, and `any` policies.
-- Full redirect evidence: hops, status, method, source/target, cross-host/origin, HTTPS downgrade, loop/max-redirect outcome.
-- Separate connect/read timeout, scan duration, response byte cap, `Retry-After`, and method-aware retry policy.
-- Static/session/merge cookie modes and persistent Requests sessions.
-- mTLS client certificate/private-key support.
-- True streamed response limits instead of decoding an unlimited body first.
-- Cached semantic response analyzer for JSON/HTML/text.
-- Adaptive early-stop, limited syntax-probe concurrency, WAF/session/redirect interference profiling, and session-health controls.
-- Automatic injection-point discovery for query, repeated form/query values, JSON/GraphQL paths, cookies, headers, path segments, and structured multipart text parts.
-- Structured multipart import that preserves files and exposes scalar fields for testing.
-- Async scan **and mapper** jobs with pause/resume/cancel.
-- Bounded Web worker pool, job TTL/limits, and replayable SSE event log with event IDs.
-- Remote Web binding protection: explicit `--allow-remote` plus access token.
-- Reorganized tabbed Web workspace, request/response/diff/redirect inspector, filters, Web templates/reports, mobile action bar, keyboard focus and live status regions.
-- PWA shell assets; service worker caches static assets only and never caches `/api/*`.
-- Python compatibility contract: Python >=3.10, tested syntax against Python 3.10 grammar, CI matrix configured for 3.10–3.14.
+- Adaptive SQLi detector with baseline stability, repeatable TRUE/FALSE confirmation, confidence and reproducibility scores.
+- Query, form, nested JSON/GraphQL, multipart, cookie, header, path and raw/XML injection points.
+- Raw HTTP and cURL import plus local injection-point discovery.
+- Explicit redirect policies: `never`, `same-origin`, `same-host`, `any`.
+- Session cookies, Basic/Bearer auth, HTTP/SOCKS proxy support, custom CA and mTLS.
+- Streamed body limits, connect/read timeouts, rate limits, retries and `Retry-After` handling.
+- WAF/rate-limit/session/redirect interference profiling separated from SQLi confidence.
+- JSON/Markdown/HTML reporting and redacted request templates.
+- Async Web scan and private-lab mapper jobs with pause/resume/cancel and replayable SSE.
+- Professional responsive Web UI for desktop, tablet and mobile.
+- Protected remote Web console with token authentication, usable LAN/VPN access URLs and optional explicit CORS origins.
 
-## Installation
+## Install
 
-### Linux / Kali / Debian / Ubuntu / Arch / Fedora / Alpine / Termux / Homebrew
+### Linux / Kali / Debian / Ubuntu / Fedora / Arch / Alpine / Termux
 
 ```bash
 bash scripts/install-linux.sh
 ```
-
-The installer:
-
-1. detects an already installed Python interpreter;
-2. reuses it when it is Python **3.10 or newer**;
-3. installs Python/Git/venv support through a supported package manager only when needed;
-4. creates the isolated environment with the exact selected Python `major.minor`;
-5. installs WebSQLMapper dependencies into that environment;
-6. creates the `websqlmapper` command;
-7. sets `WEBSQLMAPPER_HOME` and adds the command directory to the user's shell PATH.
-
-See [`docs/INSTALL.md`](docs/INSTALL.md) for fallback and offline behavior.
 
 ### Windows CMD
 
@@ -54,7 +37,9 @@ See [`docs/INSTALL.md`](docs/INSTALL.md) for fallback and offline behavior.
 scripts\install.cmd
 ```
 
-The CMD installer reuses any compatible installed Python >=3.10. If none is discoverable, it attempts installation with `winget`. It creates an isolated venv with that same interpreter version, verifies the version match, installs dependencies there, makes `websqlmapper` available immediately in the launching Command Prompt, and persists `WEBSQLMAPPER_HOME` plus the command directory in the **user** PATH without replacing existing entries.
+Both installers prefer an already-installed compatible **Python >=3.10**, create the venv with that same major/minor, install dependencies into it, create the `websqlmapper` command and configure the user environment.
+
+See [`docs/INSTALL.md`](docs/INSTALL.md) for installation details.
 
 ## Quick start
 
@@ -77,9 +62,9 @@ websqlmapper scan \
   --json
 ```
 
-## Import a real request
+## Import a captured request
 
-### Raw HTTP
+Raw HTTP:
 
 ```bash
 websqlmapper scan \
@@ -89,161 +74,28 @@ websqlmapper scan \
   --authorized
 ```
 
-### cURL
+cURL parsing/discovery:
 
 ```bash
 websqlmapper parse --curl "curl -L 'https://example.test/?id=1'" --discover
 ```
 
-## Discover injection points without traffic
+Discovery never sends traffic:
 
 ```bash
 websqlmapper discover --url 'https://example.test/users/42?id=1&id=2'
 ```
 
-Or from an imported request:
-
-```bash
-websqlmapper parse --raw request.http --discover
-```
-
-Discovery is local parsing only. It does not send requests.
-
 ## Redirect control
 
-Redirects are disabled by default.
-
 ```bash
-# Never follow
 websqlmapper scan ... --redirect-policy never
-
-# Follow only when scheme, host and port remain identical
 websqlmapper scan ... --redirect-policy same-origin
-
-# Follow hostname-preserving redirects, including port/scheme changes
 websqlmapper scan ... --redirect-policy same-host
-
-# Follow any redirect up to the configured limit
 websqlmapper scan ... --redirect-policy any --max-redirects 5
 ```
 
-Compatibility aliases remain available:
-
-```bash
---follow-redirects
---no-follow-redirects
-```
-
-Each request evidence record can include the redirect chain and outcome. Cross-host hops remove sensitive authorization/cookie state before the next hop.
-
-## Transport controls
-
-```bash
-websqlmapper scan \
-  --url 'https://example.test/api?id=1' \
-  --inject query:id \
-  --connect-timeout 4 \
-  --read-timeout 8 \
-  --max-duration 300 \
-  --max-body 1500000 \
-  --retries 1 \
-  --retry-policy safe \
-  --cookie-mode session \
-  --authorized
-```
-
-Available retry policies:
-
-- `safe`: retry only GET/HEAD/OPTIONS;
-- `all`: allow retries for all supported methods;
-- `none`: disable automatic retry.
-
-`429`, `502`, `503`, and `504` are transient candidates. `Retry-After` is honored with a bounded wait.
-
-Cookie modes:
-
-- `static`: resend the configured cookie header exactly;
-- `session`: seed a Requests cookie jar and accept server rotation;
-- `merge`: seed configured cookies and then keep server updates.
-
-Concurrency is deliberately limited to independent syntax probes. Timing probes remain serial.
-
-```bash
---concurrency 4
-```
-
-For concurrency >1, `cookie-mode=static` is required to avoid session-state races.
-
-## TLS, proxy, and authentication
-
-```bash
-websqlmapper scan ... \
-  --proxy http://127.0.0.1:8080 \
-  --ca-bundle ./lab-ca.pem \
-  --client-cert ./client-cert.pem \
-  --client-key ./client-key.pem \
-  --basic user:password
-```
-
-Bearer tokens are also supported:
-
-```bash
---bearer TOKEN
-```
-
-Sensitive authorization/cookie values are redacted from normal evidence/report output.
-
-## Scan strategies
-
-```text
-safe      lowest request cost; timing disabled
-normal    balanced default
-thorough  more baseline/confirmation work and timing enabled by profile
-```
-
-Adaptive scheduling is enabled by default:
-
-```bash
---adaptive
-```
-
-When a repeatable, high-confidence boolean oracle is already confirmed, lower-value remaining probe families can be skipped. To force full configured coverage:
-
-```bash
---exhaustive
-```
-
-## Interference profile
-
-SQLi confidence is kept separate from request interference signals. Reports can include:
-
-```text
-waf_or_edge_blocking
-rate_limiting
-session_or_auth_drift
-redirect_interference
-redirect_behavior_drift
-response_truncation
-```
-
-This helps distinguish middleware/WAF/login changes from database behavior.
-
-## Private SQLite mapper
-
-The automated blind mapper remains hard-restricted to private/loopback targets.
-
-```bash
-websqlmapper map \
-  --url 'http://127.0.0.1:8088/item?id=1' \
-  --inject query:id \
-  --context auto \
-  --max-rows 1 \
-  --max-chars 32 \
-  --max-requests 1000 \
-  --authorized
-```
-
-`context=auto` calibrates both numeric and quoted-string oracles and chooses the better-separated one. The mapper shares the semantic response analyzer, caches answered conditions, and narrows common ASCII codepoints before expanding to Unicode. It also snapshots the initial private/loopback DNS address set and revalidates it during inference; any resolution change or public address stops mapping fail-closed.
+Each redirect hop can be recorded with status, method, source/target, timing, cross-host/origin state and HTTPS downgrade information.
 
 ## Web interface
 
@@ -259,178 +111,114 @@ Default:
 http://127.0.0.1:8787
 ```
 
-The Web UI includes:
+The v0.4.2 Web UI uses a professional analyst workspace with:
 
-- Request / Injection / Transport / Strategy / Templates tabs;
-- raw HTTP and cURL import;
-- automatic injection-point discovery;
-- visual headers/cookies editors;
-- async scan and mapper jobs;
-- real progress based on planned work;
-- pause/resume/stop;
-- Findings / Timeline / Inspector / Raw result views;
-- Request / Response / Diff / Redirects inspector tabs;
-- timeline phase/status/search filters;
-- Web template management;
-- JSON/Markdown/HTML report download;
-- mobile-specific sticky actions;
-- keyboard focus styles and live status regions.
+- compact command bar and live connection state;
+- current target/injection/profile context;
+- Request / Injection / Transport / Strategy / Templates configuration tabs;
+- automatic input discovery;
+- visual header/cookie editors;
+- Run / Map / Pause / Resume / Stop controls;
+- confidence, reproducibility, DBMS, interference and request metrics;
+- Findings / Timeline / Inspector / Raw result tabs;
+- request/response/diff/redirect evidence inspection;
+- mobile action controls and responsive layout.
 
-### Remote Web binding
+## Remote Web console
 
-A remote bind is intentionally rejected unless explicitly enabled:
-
-```bash
-websqlmapper web --host 0.0.0.0
-# error: remote web binding requires --allow-remote
-```
-
-To permit it:
+Remote binding is intentionally opt-in:
 
 ```bash
 websqlmapper web --host 0.0.0.0 --allow-remote
 ```
 
-A random access token is generated when one is not supplied. You can provide your own:
+When no token is provided, WebSQLMapper creates one and prints usable private links, for example:
+
+```text
+WebSQLMapper web console · v0.4.2
+Listening on 0.0.0.0:8787
+Access URLs:
+  http://127.0.0.1:8787/#token=wsm_...
+  http://192.168.1.50:8787/#token=wsm_...
+Web access token: wsm_...
+```
+
+`0.0.0.0` is only a bind address; clients use the server's actual LAN/VPN address. The token in the private link is stored in the URL **fragment**, which browsers do not send in the initial HTTP request. The Web UI consumes it into session storage and removes the fragment from the address bar.
+
+Custom token:
 
 ```bash
 websqlmapper web \
   --host 0.0.0.0 \
   --allow-remote \
-  --token 'wsm_example_secret'
+  --token 'wsm_my_private_console_token'
 ```
 
-The token protects API/SSE access; state-changing requests also receive an Origin check. Local-only mode additionally rejects unexpected `Host` headers to reduce DNS-rebinding exposure against the loopback UI/API.
-
-## Web job limits
+Trusted cross-origin console/reverse-proxy integration can be enabled explicitly:
 
 ```bash
 websqlmapper web \
-  --max-workers 4 \
-  --max-jobs 50 \
-  --job-ttl 1800
+  --host 0.0.0.0 \
+  --allow-remote \
+  --allowed-origin 'https://console.example.test'
 ```
 
-Jobs execute through a bounded worker pool instead of one unlimited thread per scan. Terminal jobs expire after the TTL. SSE events have IDs and are retained in a bounded replay log so reconnecting clients can resume after a known event ID.
+`--allowed-origin` is repeatable. Direct same-origin WebSQLMapper usage does not require CORS configuration.
+
+API authentication supports:
+
+```text
+X-WebSQLMapper-Token: <token>
+Authorization: Bearer <token>
+```
+
+Native `EventSource` cannot attach a custom auth header, so query-token authentication is accepted only on the SSE event route and the server redacts it from logs.
+
+For untrusted networks, put the console behind HTTPS and restrict network access. See [`docs/REMOTE_WEB.md`](docs/REMOTE_WEB.md).
+
+## Private SQLite mapper
+
+```bash
+websqlmapper map \
+  --url 'http://127.0.0.1:8088/item?id=1' \
+  --inject query:id \
+  --context auto \
+  --max-rows 1 \
+  --max-chars 32 \
+  --max-requests 1000 \
+  --authorized
+```
+
+The mapper is hard-restricted to private/loopback targets and revalidates private DNS resolution during inference.
 
 ## Reports
 
-Save during a scan:
-
 ```bash
 websqlmapper scan ... --save report.json --report-format json
-```
-
-Render later:
-
-```bash
 websqlmapper report report.json --format markdown --output report.md
 websqlmapper report report.json --format html --output report.html
 ```
 
-Reports include confidence, reproducibility, DBMS hints, interference, request timeline, redirect evidence, and redacted request/response excerpts.
-
-## Request templates
-
-```bash
-websqlmapper template save product --url 'https://example.test/?id=1' --inject query:id
-websqlmapper template list
-websqlmapper template show product
-websqlmapper template delete product
-```
-
-Templates are redacted before persistence.
-
-## Local training lab
-
-```bash
-python lab/vulnerable_server.py --host 127.0.0.1 --port 8088
-```
-
-Then:
-
-```bash
-websqlmapper scan \
-  --url 'http://127.0.0.1:8088/item?id=1' \
-  --inject query:id \
-  --profile safe \
-  --authorized
-```
-
-The lab also contains dedicated endpoints used to test redirects, loops, large streamed responses, retry behavior, cookie rotation, WAF-like blocking, dynamic JSON, timeouts, and request locations.
-
-## Testing
+## Tests
 
 ```bash
 python -m compileall -q websqlmapper lab tests
 python -X dev -W error::ResourceWarning -m unittest discover -s tests -v
-python tests/cli_smoke.py
 python tests/browser_smoke.py
+python tests/remote_console_smoke.py
 bash scripts/test-install-linux.sh
 ```
 
-The project contains a Python 3.10 grammar compatibility test and CI definitions for Python 3.10 through 3.14 on Linux/Windows.
-
-## Performance model
-
-Version 0.4.1 avoids unnecessary work through:
-
-- persistent HTTP sessions/connection reuse;
-- cached normalized/semantic bodies;
-- semantic JSON comparison;
-- body streaming with a byte cap;
-- adaptive early-stop;
-- bounded concurrency for independent syntax probes;
-- cached mapper boolean conditions;
-- narrower ASCII-first character inference.
-
-The default remains conservative: timing measurements are serialized and concurrency is opt-in.
-
-## Architecture
-
-```text
-CLI / Web UI
-     │
-     ├── Importers + Injection Discovery
-     │
-     ├── RequestConfig
-     │       │
-     │       ▼
-     │   HTTPClient
-     │   ├── Session/Cookies
-     │   ├── Redirect Engine
-     │   ├── Retry/Timeout/Body Limits
-     │   ├── Proxy/Auth/mTLS
-     │   └── Request Evidence
-     │
-     ├── Semantic Response Analyzer
-     │       │
-     │       ├── SQLiScanner
-     │       │   ├── Adaptive Scheduler
-     │       │   ├── WAF/Auth/Redirect Interference
-     │       │   └── DBMS/Confidence/Reproducibility
-     │       │
-     │       └── SQLiteBlindMapper (private/lab only)
-     │
-     └── Web Job Manager
-         ├── Bounded Worker Pool
-         ├── TTL / Job Limits
-         └── Replayable SSE Event Log
-```
-
-## Defensive remediation
-
-If WebSQLMapper confirms SQL injection behavior in software you maintain, prioritize parameterized/prepared queries, strict query construction, least-privilege database accounts, and server-side input handling. Do not treat WAF filtering as a replacement for fixing unsafe query construction.
+The project has a Python 3.10 grammar-compatibility contract and CI definitions through Python 3.14.
 
 ## References
 
-- OWASP SQL Injection Prevention Cheat Sheet: https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html
-- OWASP Injection Prevention Cheat Sheet: https://cheatsheetseries.owasp.org/cheatsheets/Injection_Prevention_Cheat_Sheet.html
-- PortSwigger SQL injection: https://portswigger.net/web-security/sql-injection
-- PortSwigger SQL injection cheat sheet: https://portswigger.net/web-security/sql-injection/cheat-sheet
-- Requests advanced usage: https://requests.readthedocs.io/en/latest/user/advanced/
-- Python `concurrent.futures`: https://docs.python.org/3/library/concurrent.futures.html
-- Python `venv`: https://docs.python.org/3/library/venv.html
+- OWASP SQL Injection Prevention Cheat Sheet
+- OWASP Injection Prevention Cheat Sheet
+- PortSwigger SQL injection and SQLi cheat sheet
+- Requests advanced usage
+- Python `concurrent.futures` and `venv` documentation
+- WHATWG Server-Sent Events
 
 ## License
 

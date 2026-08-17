@@ -5,7 +5,7 @@ import sys
 from dataclasses import dataclass
 
 
-VERSION = "0.4.1"
+VERSION = "0.4.2"
 
 
 @dataclass(frozen=True)

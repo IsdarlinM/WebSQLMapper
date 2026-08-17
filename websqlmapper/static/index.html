@@ -12,16 +12,36 @@
 <body>
   <main class="app-shell">
     <header class="topbar">
-      <div class="brand"><span class="eyebrow">AUTHORIZED SECURITY TESTING</span><h1>Web SQL Injector</h1><span class="version">imr :: v0.4.1</span></div>
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">WS</span>
+        <div class="brand-copy"><span class="eyebrow">AUTHORIZED SECURITY TESTING</span><h1>Web SQL Injector</h1><span class="version">imr :: v0.4.2</span></div>
+      </div>
+      <div class="top-context" aria-label="Console connection">
+        <span id="connection-indicator" class="connection-indicator"><i></i><span id="connection-label">checking console</span></span>
+        <span id="server-mode" class="server-mode">local</span>
+      </div>
       <div class="top-actions">
         <span id="state" class="status-pill" role="status" aria-live="polite">idle</span>
         <button id="scan-btn" type="button">Run scan</button>
-        <button id="map-btn" type="button" class="secondary">Map private lab</button>
+        <button id="map-btn" type="button" class="secondary">Map lab</button>
         <button id="pause-btn" type="button" class="secondary" disabled>Pause</button>
         <button id="resume-btn" type="button" class="secondary" disabled>Resume</button>
         <button id="stop-btn" type="button" class="danger" disabled>Stop</button>
       </div>
     </header>
+
+    <section id="remote-access" class="access-strip" hidden>
+      <div class="access-copy">
+        <span class="access-kicker">REMOTE CONSOLE</span>
+        <strong id="access-title">Console access required</strong>
+        <span id="access-message">Enter the access token printed by the WebSQLMapper server.</span>
+      </div>
+      <div class="access-controls">
+        <label class="token-field"><span>Access token</span><input id="web-token" type="password" autocomplete="off" spellcheck="false" placeholder="wsm_…"></label>
+        <button id="connect-console" type="button">Connect</button>
+        <button id="forget-console" type="button" class="ghost">Forget</button>
+      </div>
+    </section>
 
     <section class="workspace">
       <aside class="left-rail panel" aria-label="Configuration">
@@ -34,8 +54,8 @@
         </nav>
 
         <section class="tab-panel active" data-panel="request">
-          <h2>Request source</h2>
-          <details class="importer" open><summary>Import raw HTTP / cURL</summary>
+          <div class="panel-heading"><span class="section-index">01</span><div><h2>Request</h2><p>Build or import the exact HTTP request to analyze.</p></div></div>
+          <details class="importer"><summary>Import raw HTTP / cURL</summary>
             <div class="two"><label>Format<select id="import-kind"><option value="raw">Raw HTTP</option><option value="curl">cURL</option></select></label><label>Scheme<select id="import-scheme"><option>https</option><option>http</option></select></label></div>
             <label>Captured request<textarea id="import-text" rows="7" placeholder="POST /api/user HTTP/1.1&#10;Host: example.test&#10;Content-Type: application/json&#10;&#10;{&quot;user&quot;:{&quot;id&quot;:&quot;1&quot;}}"></textarea></label>
             <button type="button" class="secondary wide" id="parse-btn">Parse request</button>
@@ -51,7 +71,7 @@
         </section>
 
         <section class="tab-panel" data-panel="injection">
-          <div class="section-head"><h2>Injection point</h2><button id="discover-btn" type="button" class="ghost">Discover</button></div>
+          <div class="panel-heading with-action"><span class="section-index">02</span><div><h2>Injection point</h2><p>Select the exact input WebSQLMapper should vary.</p></div><button id="discover-btn" type="button" class="ghost">Discover inputs</button></div>
           <div id="injection-points" class="point-list" aria-live="polite"><p class="empty">Import or configure a request, then discover its input points.</p></div>
           <div class="two"><label>Location<select id="location"><option>query</option><option>form</option><option>json</option><option>graphql</option><option>cookie</option><option>header</option><option>path</option><option>raw</option></select></label><label>Parameter / path<input id="parameter" value="id"></label></div>
           <div class="two"><label>Original value<input id="original-value" value="1"></label><label>SQL context<select id="context"><option>auto</option><option>numeric</option><option>string</option></select></label></div>
@@ -59,8 +79,8 @@
         </section>
 
         <section class="tab-panel" data-panel="transport">
-          <h2>Transport & session</h2>
-          <label>Web access token <span class="hint">only required for protected remote UI</span><input id="web-token" type="password" autocomplete="off"></label>
+          <div class="panel-heading"><span class="section-index">03</span><div><h2>Transport & session</h2><p>Control routing, TLS, retries and authenticated state.</p></div></div>
+          <div class="transport-note"><strong>Console access</strong><span>Remote console authentication is managed from the connection bar above. Target credentials configured below are independent.</span></div>
           <label>Proxy<input id="proxy" placeholder="http://127.0.0.1:8080 or socks5h://127.0.0.1:9050"></label>
           <label>Custom CA bundle<input id="ca-bundle"></label>
           <div class="two"><label>mTLS client certificate<input id="client-cert" placeholder="/path/client.crt"></label><label>mTLS client key<input id="client-key" placeholder="/path/client.key"></label></div>
@@ -75,7 +95,7 @@
         </section>
 
         <section class="tab-panel" data-panel="strategy">
-          <h2>Scan strategy</h2>
+          <div class="panel-heading"><span class="section-index">04</span><div><h2>Scan strategy</h2><p>Balance confirmation depth, budget and processing speed.</p></div></div>
           <div class="three"><label>Profile<select id="profile"><option>safe</option><option selected>normal</option><option>thorough</option></select></label><label>Baseline<input id="baseline-samples" type="number" min="3" max="9" placeholder="profile"></label><label>Confirm rounds<input id="confirmation-rounds" type="number" min="2" max="5" placeholder="profile"></label></div>
           <div class="two"><label>Request budget<input id="max-requests" type="number" min="10" max="2000" placeholder="profile"></label><label>Timing<select id="time-probes"><option value="auto">Profile default</option><option value="true">Enabled</option><option value="false">Disabled</option></select></label></div>
           <label class="check"><input id="adaptive" type="checkbox" checked> Adaptive early-stop after high-confidence confirmation</label>
@@ -86,7 +106,7 @@
         </section>
 
         <section class="tab-panel" data-panel="templates">
-          <div class="section-head"><h2>Templates</h2><button id="refresh-templates" class="ghost" type="button">Refresh</button></div>
+          <div class="panel-heading with-action"><span class="section-index">05</span><div><h2>Templates</h2><p>Reuse redacted request configurations safely.</p></div><button id="refresh-templates" class="ghost" type="button">Refresh</button></div>
           <label>Saved template<select id="template-list"><option value="">No template selected</option></select></label>
           <div class="actions"><button id="load-template" class="secondary" type="button">Load</button><button id="delete-template" class="danger" type="button">Delete</button></div>
           <label>New template name<input id="template-name" maxlength="64"></label><button id="save-template" class="secondary wide" type="button">Save redacted request template</button>
@@ -95,7 +115,14 @@
       </aside>
 
       <section class="main-stage">
+        <section class="context-bar panel" aria-label="Current scan context">
+          <div class="context-item context-target"><span>Target</span><strong id="context-target">127.0.0.1</strong><small id="context-method">GET</small></div>
+          <div class="context-item"><span>Injection</span><strong id="context-injection">query:id</strong><small id="context-value">value 1</small></div>
+          <div class="context-item"><span>Profile</span><strong id="context-profile">normal</strong><small id="context-redirect">redirects: never</small></div>
+          <div class="context-actions"><button id="copy-target" type="button" class="ghost">Copy target</button></div>
+        </section>
         <section class="panel status-panel">
+          <div class="status-heading"><div><span class="muted-label">LIVE ANALYSIS</span><h2>Scan status</h2></div><span class="status-caption">Differential evidence and request progress</span></div>
           <div class="progress-row"><div><span class="muted-label">Progress</span><strong id="progress-text">0 / —</strong></div><div class="progress-track" aria-hidden="true"><div id="progress" class="progress-bar"></div></div></div>
           <div class="metrics"><div><span>Confidence</span><strong id="metric-confidence">—</strong></div><div><span>Reproducibility</span><strong id="metric-repro">—</strong></div><div><span>DBMS</span><strong id="metric-dbms">—</strong></div><div><span>Interference</span><strong id="metric-interference">—</strong></div><div><span>Requests</span><strong id="metric-requests">0</strong></div></div>
           <div id="summary" class="summary" role="status" aria-live="polite">Configure a target and run a scan.</div><div id="phases" class="phases"></div>
@@ -108,7 +135,7 @@
             <button class="result-tab" data-result-tab="inspector">Inspector</button>
             <button class="result-tab" data-result-tab="raw">Raw</button>
           </nav>
-          <div class="result-panel active" data-result-panel="findings"><div id="findings" class="finding-list empty">No findings yet.</div></div>
+          <div class="result-panel active" data-result-panel="findings"><div id="findings" class="finding-list empty"><div class="empty-state"><span class="empty-icon">◎</span><strong>No findings yet</strong><span>Run a scan to populate confirmed evidence, response differences and DBMS signals.</span></div></div></div>
           <div class="result-panel" data-result-panel="timeline">
             <div class="filters"><select id="timeline-phase"><option value="">All phases</option><option>baseline</option><option>syntax</option><option>health</option><option>boolean</option><option>timing</option><option>mapping</option></select><select id="timeline-status"><option value="">All status</option><option value="2">2xx</option><option value="3">3xx</option><option value="4">4xx</option><option value="5">5xx</option><option value="0">Network</option></select><input id="timeline-search" placeholder="Search label"></div>
             <div class="table-wrap"><table><thead><tr><th>#</th><th>Phase</th><th>Label</th><th>Status</th><th>Bytes</th><th>Time</th><th>Redirects</th><th>Inspect</th></tr></thead><tbody id="timeline"></tbody></table></div>
@@ -124,6 +151,5 @@
   </main>
   <div class="mobile-action-bar" aria-label="Scan controls"><button id="mobile-run" type="button">Run</button><button id="mobile-map" type="button" class="secondary">Map</button><button id="mobile-pause" type="button" class="secondary" disabled>Pause</button><button id="mobile-stop" type="button" class="danger" disabled>Stop</button></div>
   <script src="/static/app.js"></script>
-  <script src="/static/layout-hotfix.js"></script>
 </body>
 </html>

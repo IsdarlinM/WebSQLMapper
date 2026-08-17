@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.4.2 - 2026-08-17
+
+### Added
+
+- Professional remote-console connection bar with explicit locked/connected/offline states.
+- Token bootstrap through URL fragments (`#token=...`) so private access links do not send the token in the initial HTTP request.
+- Remote access URL discovery for wildcard binds, including LAN/VPN interface addresses when available.
+- Optional repeatable `web --allowed-origin` support for trusted cross-origin consoles with controlled CORS preflight handling.
+- Bearer-token authentication as an alternative to `X-WebSQLMapper-Token` for remote API clients.
+- Live target/injection/profile context strip in the Web workspace.
+
+### Changed
+
+- `web --host 0.0.0.0 --allow-remote` now prints usable access URLs instead of only `http://0.0.0.0:PORT`.
+- Remote UI no longer enters an error state on first load before the user supplies the access token.
+- Web layout uses a compact professional command bar, fixed-width configuration rail, denser status metrics, stronger empty states and cleaner responsive behavior.
+- Mobile and tablet layouts keep remote authentication, target context and scan controls visible without overlapping the workspace.
+- Remote custom tokens must contain at least 16 characters.
+
+### Fixed
+
+- `/api/health` reported the stale hard-coded version `0.4.0`; it now reports the package version.
+- Initial remote `refreshTemplates()` generated a 401 and changed the entire console to `error` before authentication.
+- Remote wildcard bind output was not directly actionable from another device.
+- Mobile action-state synchronization could re-enable controls while the remote console was still locked.
+
 ## 0.4.1 - 2026-08-17
 
 ### Fixed

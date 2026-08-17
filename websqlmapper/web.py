@@ -5,6 +5,7 @@ import json
 import mimetypes
 import re
 import secrets
+import socket
 import threading
 import time
 import uuid
@@ -13,8 +14,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
+from . import __version__
 from .control import ScanControl
 from .importers import discover_injection_points, parse_curl, parse_raw_request
 from .mapper import SQLiteBlindMapper
@@ -33,13 +35,44 @@ class ServerSettings:
     token: str|None=None
     remote: bool=False
     allowed_hosts: tuple[str,...]=()
+    allowed_origins: tuple[str,...]=()
+    bind_host: str="127.0.0.1"
+    bind_port: int=0
+    access_urls: tuple[str,...]=()
 
 SETTINGS=ServerSettings()
+
+
+def _canonical_origin(value: str) -> str|None:
+    try:
+        parsed=urlsplit(value)
+        if parsed.scheme not in {"http","https"} or not parsed.hostname:
+            return None
+        host=parsed.hostname.lower()
+        port=parsed.port
+        default=80 if parsed.scheme=="http" else 443
+        suffix="" if port in {None,default} else f":{port}"
+        host_display=f"[{host}]" if ":" in host else host
+        return f"{parsed.scheme}://{host_display}{suffix}"
+    except ValueError:
+        return None
+
+
+def _cors_origin(handler: BaseHTTPRequestHandler) -> str|None:
+    origin=handler.headers.get("Origin")
+    if not origin:
+        return None
+    canonical=_canonical_origin(origin)
+    return origin if canonical and canonical in SETTINGS.allowed_origins else None
 
 
 def _send_common_headers(handler: BaseHTTPRequestHandler, *, api: bool=False) -> None:
     handler.send_header("X-Content-Type-Options","nosniff"); handler.send_header("X-Frame-Options","DENY"); handler.send_header("Referrer-Policy","no-referrer")
     handler.send_header("Permissions-Policy","camera=(), microphone=(), geolocation=()")
+    cors=_cors_origin(handler)
+    if cors:
+        handler.send_header("Access-Control-Allow-Origin",cors); handler.send_header("Vary","Origin")
+    if handler.close_connection: handler.send_header("Connection","close")
     if api: handler.send_header("Cache-Control","no-store")
 
 def _json_response(handler: BaseHTTPRequestHandler,status:int,payload:object) -> None:
@@ -162,7 +195,11 @@ class JobManager:
     def list(self) -> list[dict[str,object]]:
         with self._lock:
             self._cleanup_locked(); return [{"id":j.id,"kind":j.kind,"status":j.status,"created_at":j.created_at,"updated_at":j.updated_at} for j in sorted(self._jobs.values(),key=lambda j:j.created_at,reverse=True)]
-    def shutdown(self) -> None: self._executor.shutdown(wait=False,cancel_futures=True)
+    def shutdown(self) -> None:
+        with self._lock:
+            for job in self._jobs.values():
+                if job.status not in _TERMINAL: job.control.cancel()
+        self._executor.shutdown(wait=False,cancel_futures=True)
 
 JOBS=JobManager()
 
@@ -172,8 +209,40 @@ def _is_loopback_host(host:str) -> bool:
     try: return ipaddress.ip_address(host).is_loopback
     except ValueError: return False
 
+def _interface_hosts(bind_host: str) -> tuple[str,...]:
+    wildcard=bind_host in {"0.0.0.0","::","[::]"}
+    if not wildcard:
+        return (bind_host,)
+    found:set[str]=set()
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(),None,type=socket.SOCK_STREAM):
+            address=info[4][0].split("%",1)[0]
+            try:
+                ip=ipaddress.ip_address(address)
+            except ValueError:
+                continue
+            if not ip.is_loopback and not ip.is_unspecified and not ip.is_link_local:
+                found.add(str(ip))
+    except OSError:
+        pass
+    return tuple(sorted(found,key=lambda value:(":" in value,value)))
+
+
+def _access_urls(bind_host: str, port: int, token: str|None) -> tuple[str,...]:
+    hosts=list(_interface_hosts(bind_host))
+    if bind_host in {"0.0.0.0","::","[::]"}:
+        hosts.insert(0,"127.0.0.1")
+    urls=[]
+    fragment=f"#token={quote(token,safe='')}" if token else ""
+    for host in dict.fromkeys(hosts):
+        display=f"[{host}]" if ":" in host else host
+        urls.append(f"http://{display}:{port}/{fragment}")
+    return tuple(urls)
+
 class WebSQLMapperHandler(BaseHTTPRequestHandler):
-    server_version="WebSQLMapper/0.4"; protocol_version="HTTP/1.1"
+    server_version="WebSQLMapper/0.4.2"; protocol_version="HTTP/1.1"
+    def version_string(self) -> str:
+        return self.server_version
     def log_message(self,fmt:str,*args:object) -> None:
         message = fmt % args
         message = re.sub(r"([?&]token=)[^&\s\"]+", r"\1<redacted>", message)
@@ -187,24 +256,42 @@ class WebSQLMapperHandler(BaseHTTPRequestHandler):
         except ValueError:
             return False
         return hostname in SETTINGS.allowed_hosts
+    def _reject(self,status:int,error:str) -> bool:
+        if self.command in {"POST","PUT","PATCH","DELETE"}: self.close_connection=True
+        _json_response(self,status,{"error":error}); return False
     def _require_host(self) -> bool:
         if self._host_ok():
             return True
-        _json_response(self,421,{"error":"unexpected Host header"})
-        return False
+        return self._reject(421,"unexpected Host header")
     def _api_token_ok(self) -> bool:
         if not SETTINGS.token: return True
-        query=parse_qs(urlsplit(self.path).query); supplied=self.headers.get("X-WebSQLMapper-Token") or (query.get("token") or [""])[0]
+        query=parse_qs(urlsplit(self.path).query)
+        authorization=self.headers.get("Authorization","")
+        bearer=authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
+        query_token=(query.get("token") or [""])[0] if urlsplit(self.path).path.endswith("/events") else ""
+        supplied=self.headers.get("X-WebSQLMapper-Token") or bearer or query_token
         return secrets.compare_digest(str(supplied),SETTINGS.token)
     def _origin_ok(self) -> bool:
         origin=self.headers.get("Origin")
         if not origin: return True
-        try: return urlsplit(origin).netloc.lower()==self.headers.get("Host","").lower()
+        canonical=_canonical_origin(origin)
+        if canonical and canonical in SETTINGS.allowed_origins: return True
+        try:
+            host=self.headers.get("Host","")
+            expected=_canonical_origin(f"http://{host}")
+            return canonical is not None and canonical==expected
         except ValueError: return False
     def _require_api_access(self) -> bool:
-        if not self._api_token_ok(): _json_response(self,401,{"error":"invalid or missing WebSQLMapper access token"}); return False
-        if self.command in {"POST","PUT","PATCH","DELETE"} and not self._origin_ok(): _json_response(self,403,{"error":"origin check failed"}); return False
+        if not self._api_token_ok(): return self._reject(401,"invalid or missing WebSQLMapper access token")
+        if self.command in {"POST","PUT","PATCH","DELETE"} and not self._origin_ok(): return self._reject(403,"origin check failed")
         return True
+    def do_OPTIONS(self) -> None:
+        path=urlsplit(self.path).path
+        if not self._require_host(): return
+        origin=self.headers.get("Origin")
+        if not path.startswith("/api/") or not origin or _canonical_origin(origin) not in SETTINGS.allowed_origins:
+            _json_response(self,403,{"error":"cross-origin request is not allowed"}); return
+        self.send_response(204); self.send_header("Access-Control-Allow-Methods","GET, POST, OPTIONS"); self.send_header("Access-Control-Allow-Headers","Content-Type, X-WebSQLMapper-Token, Authorization, Last-Event-ID"); self.send_header("Access-Control-Max-Age","600"); _send_common_headers(self,api=True); self.end_headers()
     def do_GET(self) -> None:
         path=urlsplit(self.path).path
         try:
@@ -213,7 +300,7 @@ class WebSQLMapperHandler(BaseHTTPRequestHandler):
             elif path=="/manifest.webmanifest": self._serve_static("manifest.webmanifest")
             elif path=="/service-worker.js": self._serve_static("service-worker.js")
             elif path.startswith("/static/"): self._serve_static(path.removeprefix("/static/"))
-            elif path=="/api/health": _json_response(self,200,{"status":"ok","service":"WebSQLMapper","version":"0.4.0","remote":SETTINGS.remote,"token_required":bool(SETTINGS.token)})
+            elif path=="/api/health": _json_response(self,200,{"status":"ok","service":"WebSQLMapper","version":__version__,"remote":SETTINGS.remote,"token_required":bool(SETTINGS.token),"bind_host":SETTINGS.bind_host,"bind_port":SETTINGS.bind_port,"allowed_origins":list(SETTINGS.allowed_origins)})
             elif path=="/api/jobs":
                 if self._require_api_access(): _json_response(self,200,{"jobs":JOBS.list()})
             elif path=="/api/templates":
@@ -241,7 +328,8 @@ class WebSQLMapperHandler(BaseHTTPRequestHandler):
         path=urlsplit(self.path).path
         try:
             if not self._require_host(): return
-            if not path.startswith("/api/") or not self._require_api_access(): return
+            if not path.startswith("/api/"): self._reject(404,"not found"); return
+            if not self._require_api_access(): return
             payload=_read_json(self)
             if path=="/api/scan": _json_response(self,200,_scan_from_payload(payload).to_dict())
             elif path=="/api/map": _json_response(self,200,_map_from_payload(payload).to_dict())
@@ -278,8 +366,10 @@ class WebSQLMapperHandler(BaseHTTPRequestHandler):
                 else: _json_response(self,404,{"error":"unknown job action"}); return
                 job.emit({"event":"job","status":job.status,"action":action}); _json_response(self,200,{"job_id":job.id,"status":job.status})
             else: _json_response(self,404,{"error":"not found"})
-        except (SafetyError,ValueError,RuntimeError) as exc: _json_response(self,400,{"error":str(exc)})
-        except Exception as exc: _json_response(self,500,{"error":f"unexpected server error: {exc}"})
+        except (SafetyError,ValueError,RuntimeError) as exc:
+            self.close_connection=True; _json_response(self,400,{"error":str(exc)})
+        except Exception as exc:
+            self.close_connection=True; _json_response(self,500,{"error":f"unexpected server error: {exc}"})
     def _serve_events(self,job_id:str) -> None:
         job=JOBS.get(job_id)
         if not job: _json_response(self,404,{"error":"job not found"}); return
@@ -310,21 +400,38 @@ class WebSQLMapperHandler(BaseHTTPRequestHandler):
         raw=resource.read_bytes(); content_type=mimetypes.guess_type(name)[0] or "application/octet-stream"
         self.send_response(200); self.send_header("Content-Type",content_type+("; charset=utf-8" if content_type.startswith("text/") or content_type in {"application/javascript","application/manifest+json"} else "")); self.send_header("Content-Length",str(len(raw))); self.send_header("Content-Security-Policy","default-src 'self'; connect-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; manifest-src 'self'; worker-src 'self'"); _send_common_headers(self); self.end_headers(); self.wfile.write(raw)
 
-def run_web(host:str="127.0.0.1",port:int=8787,*,allow_remote:bool=False,token:str|None=None,max_workers:int=4,max_jobs:int=50,job_ttl:int=1800) -> None:
+def run_web(host:str="127.0.0.1",port:int=8787,*,allow_remote:bool=False,token:str|None=None,max_workers:int=4,max_jobs:int=50,job_ttl:int=1800,allowed_origins:list[str]|tuple[str,...]|None=None) -> None:
     if port<0 or port>65535: raise ValueError("port must be between 0 and 65535")
     if max_workers<1 or max_workers>16: raise ValueError("max_workers must be between 1 and 16")
     if max_jobs<5 or max_jobs>500: raise ValueError("max_jobs must be between 5 and 500")
     if job_ttl<60 or job_ttl>86400: raise ValueError("job_ttl must be between 60 and 86400 seconds")
     remote=not _is_loopback_host(host)
     if remote and not allow_remote: raise ValueError("remote web binding requires --allow-remote")
+    if remote and token is not None and len(token)<16: raise ValueError("remote web token must contain at least 16 characters")
     if remote and not token: token="wsm_"+secrets.token_urlsafe(24)
-    SETTINGS.remote=remote; SETTINGS.token=token
+    canonical_origins=[]
+    for item in allowed_origins or []:
+        canonical=_canonical_origin(str(item))
+        if not canonical: raise ValueError(f"invalid allowed origin: {item}")
+        canonical_origins.append(canonical)
+    SETTINGS.remote=remote; SETTINGS.token=token; SETTINGS.allowed_origins=tuple(dict.fromkeys(canonical_origins)); SETTINGS.bind_host=host
     SETTINGS.allowed_hosts=() if remote else ("127.0.0.1","localhost","localhost.localdomain","::1")
     JOBS.configure(max_workers,max_jobs,job_ttl)
     try: server=ThreadingHTTPServer((host,port),WebSQLMapperHandler)
     except OSError as exc: raise RuntimeError(f"cannot bind web server on {host}:{port}: {exc}") from exc
-    print(f"WebSQLMapper web UI: http://{host}:{server.server_port}")
-    if token: print(f"Web access token: {token}")
+    SETTINGS.bind_port=server.server_port; SETTINGS.access_urls=_access_urls(host,server.server_port,token if remote else None)
+    print(f"WebSQLMapper web console · v{__version__}")
+    print(f"Listening on {host}:{server.server_port}")
+    if SETTINGS.access_urls:
+        print("Access URLs:")
+        for url in SETTINGS.access_urls: print(f"  {url}")
+    if token:
+        print(f"Web access token: {token}")
+        print("Remote access is token-protected. Keep the token/private link secret.")
+    if remote and not SETTINGS.access_urls:
+        print("Remote bind is active. Open this port in the host firewall and browse to the device LAN/VPN address.")
+    if SETTINGS.allowed_origins:
+        print("Allowed cross-origin consoles: "+", ".join(SETTINGS.allowed_origins))
     try: server.serve_forever()
     except KeyboardInterrupt: pass
     finally: server.server_close(); JOBS.shutdown()

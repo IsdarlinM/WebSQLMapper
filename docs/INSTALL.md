@@ -1,4 +1,4 @@
-# WebSQLMapper v0.4.1 installation
+# WebSQLMapper v0.4.2 installation
 
 WebSQLMapper requires **Python 3.10 or newer** and has no upper Python version bound. The installers prefer an already installed compatible interpreter and install dependencies into a virtual environment created by that same Python `major.minor`.
 

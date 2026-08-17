@@ -150,7 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
     report=sub.add_parser("report"); report.add_argument("input"); report.add_argument("--format",choices=["json","markdown","html"],default="markdown"); report.add_argument("--output")
     template=sub.add_parser("template"); tsub=template.add_subparsers(dest="template_command",required=True)
     tsave=tsub.add_parser("save"); tsave.add_argument("name"); _add_request_args(tsave,allow_template=False); tsub.add_parser("list"); tshow=tsub.add_parser("show"); tshow.add_argument("name"); tdel=tsub.add_parser("delete"); tdel.add_argument("name")
-    web=sub.add_parser("web",help="Start the web interface"); web.add_argument("--host",default="127.0.0.1"); web.add_argument("--port",type=int,default=8787); web.add_argument("--allow-remote",action="store_true"); web.add_argument("--token"); web.add_argument("--max-workers",type=int,default=4); web.add_argument("--max-jobs",type=int,default=50); web.add_argument("--job-ttl",type=int,default=1800)
+    web=sub.add_parser("web",help="Start the web interface"); web.add_argument("--host",default="127.0.0.1"); web.add_argument("--port",type=int,default=8787); web.add_argument("--allow-remote",action="store_true"); web.add_argument("--token"); web.add_argument("--max-workers",type=int,default=4); web.add_argument("--max-jobs",type=int,default=50); web.add_argument("--job-ttl",type=int,default=1800); web.add_argument("--allowed-origin",action="append",default=[],help="Allow a trusted cross-origin web console origin (repeatable)")
     update=sub.add_parser("update"); update.add_argument("--force",action="store_true"); sub.add_parser("doctor")
     return parser
 
@@ -208,7 +208,7 @@ def main(argv: list[str]|None=None) -> int:
             elif args.template_command=="delete": delete_template(args.name); print(f"Deleted template: {args.name}")
             elif args.template_command=="save": config,_=_build_config(args); print(f"Saved redacted template: {save_template(args.name,config)}")
             return 0
-        if args.command=="web": print(banner(enabled=color_enabled(args.color))); run_web(args.host,args.port,allow_remote=args.allow_remote,token=args.token,max_workers=args.max_workers,max_jobs=args.max_jobs,job_ttl=args.job_ttl); return 0
+        if args.command=="web": print(banner(enabled=color_enabled(args.color))); run_web(args.host,args.port,allow_remote=args.allow_remote,token=args.token,max_workers=args.max_workers,max_jobs=args.max_jobs,job_ttl=args.job_ttl,allowed_origins=args.allowed_origin); return 0
         if args.command=="update": [print(line) for line in update_installation(force=args.force)]; return 0
         if args.command=="doctor": return _doctor(args.color)
     except (SafetyError,ValueError,RuntimeError,RequestParseError,OSError) as exc:

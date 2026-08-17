@@ -33,7 +33,7 @@ class WebTests(unittest.TestCase):
         self.assertIn("Content-Security-Policy", index.headers)
         self.assertIn("Web SQL Injector", index.text)
         health = requests.get(self.base + "/api/health", timeout=2).json()
-        self.assertEqual(health["version"], "0.4.0")
+        self.assertEqual(health["version"], "0.4.2")
 
     def test_invalid_json_and_parse_errors_are_400(self) -> None:
         bad = requests.post(self.base + "/api/scan", data="{bad", headers={"Content-Type":"application/json"}, timeout=2)

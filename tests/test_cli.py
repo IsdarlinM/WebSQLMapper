@@ -28,6 +28,14 @@ class CLITests(unittest.TestCase):
         for command in ["scan", "map", "parse", "report", "template", "web", "update", "doctor"]:
             self.assertIn(command, help_text)
 
+    def test_web_parser_accepts_remote_console_options(self) -> None:
+        args = build_parser().parse_args([
+            "web", "--host", "0.0.0.0", "--allow-remote", "--token", "0123456789abcdef",
+            "--allowed-origin", "https://console.one", "--allowed-origin", "https://console.two",
+        ])
+        self.assertTrue(args.allow_remote)
+        self.assertEqual(args.allowed_origin, ["https://console.one", "https://console.two"])
+
     def test_scan_json_output_and_human_banner(self) -> None:
         stdout = io.StringIO(); stderr = io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -39,7 +47,7 @@ class CLITests(unittest.TestCase):
         with redirect_stdout(stdout):
             main(["--color","never","doctor"])
         self.assertIn("Web SQL Injector", stdout.getvalue())
-        self.assertIn("imr :: v0.4.1", stdout.getvalue())
+        self.assertIn("imr :: v0.4.2", stdout.getvalue())
 
     def test_cli_errors_are_controlled_without_traceback(self) -> None:
         stderr = io.StringIO()
