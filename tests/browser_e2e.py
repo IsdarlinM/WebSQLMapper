@@ -49,7 +49,7 @@ def main() -> None:
                     return
                 raise
             assert page.title() == "WebSQLMapper · Web SQL Injector"
-            assert "imr :: v0.4.0" in page.locator(".version").inner_text()
+            assert "imr :: v0.4.1" in page.locator(".version").inner_text()
 
             page.locator("#url").fill(target)
             page.locator(".config-tab[data-tab='injection']").click()

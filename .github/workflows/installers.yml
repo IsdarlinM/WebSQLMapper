@@ -29,5 +29,5 @@ jobs:
           set WEBSQLMAPPER_INSTALL_ROOT=%RUNNER_TEMP%\WebSQLMapper
           set WEBSQLMAPPER_SKIP_PATH=1
           call scripts\install.cmd
-          %RUNNER_TEMP%\WebSQLMapper\bin\websqlmapper.cmd --version
-          %RUNNER_TEMP%\WebSQLMapper\bin\websqlmapper.cmd --color never doctor
+          call %RUNNER_TEMP%\WebSQLMapper\bin\websqlmapper.cmd --version
+          call %RUNNER_TEMP%\WebSQLMapper\bin\websqlmapper.cmd --color never doctor

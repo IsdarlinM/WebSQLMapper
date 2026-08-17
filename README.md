@@ -1,15 +1,15 @@
 # WebSQLMapper
 
-**WebSQLMapper** is a Python 3.10+ toolkit for **authorized SQL injection validation**. Version 0.4.0 focuses on robustness, request fidelity, redirect/session awareness, lower processing overhead, resilient Web jobs, and a more usable desktop/mobile workspace.
+**WebSQLMapper** is a Python 3.10+ toolkit for **authorized SQL injection validation**. Version 0.4.1 focuses on robustness, request fidelity, redirect/session awareness, lower processing overhead, resilient Web jobs, and a more usable desktop/mobile workspace.
 
 ```text
 Web SQL Injector
-imr :: v0.4.0
+imr :: v0.4.1
 ```
 
 > Use WebSQLMapper only on systems you own or have explicit authorization to test. Automated database reconstruction remains restricted to private/loopback lab targets.
 
-## v0.4.0 highlights
+## v0.4.1 highlights
 
 - Redirect engine with `never`, `same-origin`, `same-host`, and `any` policies.
 - Full redirect evidence: hops, status, method, source/target, cross-host/origin, HTTPS downgrade, loop/max-redirect outcome.
@@ -54,7 +54,7 @@ See [`docs/INSTALL.md`](docs/INSTALL.md) for fallback and offline behavior.
 scripts\install.cmd
 ```
 
-The CMD installer reuses any compatible installed Python >=3.10. If none is discoverable, it attempts installation with `winget`. It creates an isolated venv with that same interpreter version, verifies the version match, installs dependencies there, sets `WEBSQLMAPPER_HOME`, and appends the command directory to the **user** PATH.
+The CMD installer reuses any compatible installed Python >=3.10. If none is discoverable, it attempts installation with `winget`. It creates an isolated venv with that same interpreter version, verifies the version match, installs dependencies there, makes `websqlmapper` available immediately in the launching Command Prompt, and persists `WEBSQLMAPPER_HOME` plus the command directory in the **user** PATH without replacing existing entries.
 
 ## Quick start
 
@@ -373,7 +373,7 @@ The project contains a Python 3.10 grammar compatibility test and CI definitions
 
 ## Performance model
 
-Version 0.4.0 avoids unnecessary work through:
+Version 0.4.1 avoids unnecessary work through:
 
 - persistent HTTP sessions/connection reuse;
 - cached normalized/semantic bodies;

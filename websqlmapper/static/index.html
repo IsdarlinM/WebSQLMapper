@@ -12,7 +12,7 @@
 <body>
   <main class="app-shell">
     <header class="topbar">
-      <div class="brand"><span class="eyebrow">AUTHORIZED SECURITY TESTING</span><h1>Web SQL Injector</h1><span class="version">imr :: v0.4.0</span></div>
+      <div class="brand"><span class="eyebrow">AUTHORIZED SECURITY TESTING</span><h1>Web SQL Injector</h1><span class="version">imr :: v0.4.1</span></div>
       <div class="top-actions">
         <span id="state" class="status-pill" role="status" aria-live="polite">idle</span>
         <button id="scan-btn" type="button">Run scan</button>
@@ -122,7 +122,8 @@
       </section>
     </section>
   </main>
-  <div class="mobile-action-bar"><button id="mobile-run" type="button">Run</button><button id="mobile-stop" type="button" class="danger" disabled>Stop</button></div>
+  <div class="mobile-action-bar" aria-label="Scan controls"><button id="mobile-run" type="button">Run</button><button id="mobile-map" type="button" class="secondary">Map</button><button id="mobile-pause" type="button" class="secondary" disabled>Pause</button><button id="mobile-stop" type="button" class="danger" disabled>Stop</button></div>
   <script src="/static/app.js"></script>
+  <script src="/static/layout-hotfix.js"></script>
 </body>
 </html>

@@ -56,7 +56,14 @@ def main() -> None:
         browser=p.chromium.launch(headless=True,executable_path=chromium,args=["--no-sandbox"]); page=browser.new_page(viewport={"width":1365,"height":900})
         page.on("console",lambda msg:console_errors.append(msg.text) if msg.type=="error" else None); page.on("pageerror",lambda exc:page_errors.append(str(exc)))
         page.set_content(build_document(),wait_until="load")
-        assert page.title()=="WebSQLMapper · Web SQL Injector"; assert "imr :: v0.4.0" in page.locator(".version").inner_text()
+        assert page.title()=="WebSQLMapper · Web SQL Injector"; assert "imr :: v0.4.1" in page.locator(".version").inner_text()
+        assert page.locator(".config-tabs").evaluate("e => e.scrollWidth <= e.clientWidth + 1")
+        page.set_viewport_size({"width":1024,"height":768})
+        left=page.locator(".left-rail").bounding_box(); stage=page.locator(".main-stage").bounding_box(); actions=page.locator(".top-actions").bounding_box()
+        assert left and stage and stage["x"] > left["x"] + left["width"] - 2, (left,stage)
+        assert actions and actions["height"] <= 44, actions
+        assert page.locator(".config-tabs").evaluate("e => e.scrollWidth <= e.clientWidth + 1")
+        page.set_viewport_size({"width":1365,"height":900})
         page.locator(".config-tab[data-tab='injection']").click(); page.locator("#context").select_option("numeric")
         page.locator(".config-tab[data-tab='strategy']").click(); page.locator("#authorized").check(); page.locator("#profile").select_option("safe")
         page.locator("#scan-btn").click()
@@ -69,6 +76,9 @@ def main() -> None:
         page.locator(".config-tab[data-tab='injection']").click(); assert page.locator("#injection-points .point").count()==1; page.locator("#injection-points .point").click(); assert page.locator("#parameter").input_value()=="user.id"
         page.keyboard.press("Tab"); focused=page.evaluate("document.activeElement && document.activeElement.tagName"); assert focused in {"BUTTON","INPUT","SELECT","TEXTAREA","SUMMARY"}
         page.set_viewport_size({"width":390,"height":844}); assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1"); assert page.locator(".mobile-action-bar").is_visible()
+        assert page.locator(".config-tabs").evaluate("e => e.scrollWidth <= e.clientWidth + 1")
+        assert page.locator("#mobile-map").is_visible(); assert page.locator("#mobile-pause").is_visible()
+        assert page.locator(".mobile-action-bar button").count()==4
         page.locator(".config-tab[data-tab='request']").click(); page.locator("#data").fill("{bad"); page.locator("#mobile-run").click(); page.wait_for_function("document.querySelector('#state').textContent === 'error'",timeout=3000); assert "JSON" in page.locator("#summary").inner_text()
         assert not console_errors,console_errors; assert not page_errors,page_errors; browser.close()
 

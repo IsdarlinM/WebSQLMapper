@@ -1,4 +1,4 @@
-# WebSQLMapper v0.4.0 installation
+# WebSQLMapper v0.4.1 installation
 
 WebSQLMapper requires **Python 3.10 or newer** and has no upper Python version bound. The installers prefer an already installed compatible interpreter and install dependencies into a virtual environment created by that same Python `major.minor`.
 
@@ -53,9 +53,11 @@ The Windows installer:
 5. verifies the venv version matches the selected version;
 6. installs dependencies using `%VENV_DIR%\Scripts\python.exe -m pip`;
 7. creates `%INSTALL_ROOT%\bin\websqlmapper.cmd`;
-8. persists `WEBSQLMAPPER_HOME`;
-9. appends the command directory to the **user** PATH;
-10. executes `websqlmapper --version` as a final verification.
+8. makes `websqlmapper` available immediately in the current Command Prompt;
+9. persists `WEBSQLMAPPER_HOME` and appends the command directory to the **user** PATH through the Windows registry without replacing the existing PATH;
+10. invokes the generated `.cmd` wrapper with `call` and executes `websqlmapper --version` as final verification.
+
+Already-open PowerShell or other terminal processes cannot inherit environment changes from a child CMD process, so reopen those terminals after installation. A Command Prompt that launches `install.cmd` directly receives the updated PATH immediately.
 
 If Python is missing and `winget` is unavailable, the installer stops with an explicit error rather than using an unsupported runtime.
 

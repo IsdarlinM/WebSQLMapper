@@ -1,4 +1,4 @@
-# WebSQLMapper v0.4.0 methodology
+# WebSQLMapper v0.4.1 methodology
 
 ## Goal
 

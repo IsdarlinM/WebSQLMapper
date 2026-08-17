@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.1 - 2026-08-17
+
+### Fixed
+
+- Windows CMD installer no longer uses fragile nested `FOR /F` quoting to read Python versions.
+- Windows installer verifies both the selected interpreter and venv major/minor explicitly before installing dependencies.
+- Windows installer invokes generated `.cmd` wrappers with `call`, so control returns to the installer and final verification executes.
+- `websqlmapper` is added to the current Command Prompt PATH immediately and persisted for future terminals without replacing the user's existing PATH.
+- Windows user environment persistence is handled by a small Python `winreg` helper, avoiding destructive or truncating PATH rewrites.
+- Windows CI/Docker smoke commands call nested batch files correctly.
+- Configuration tabs no longer clip the Templates tab on narrow side rails.
+- Tablet layout keeps configuration and results side-by-side down to 981 px and avoids wrapping Stop onto a separate toolbar row.
+- Metrics use responsive sizing instead of leaving awkward empty grid positions.
+- Mobile configuration tabs are arranged in a stable grid instead of hiding the last tab.
+- Mobile controls now expose Map and Pause/Resume in addition to Run/Stop.
+- Form controls reserve scroll space above the fixed mobile action bar.
+
+### Validation
+
+- Added Windows environment-helper idempotency tests and stronger CMD control-flow assertions.
+- Added Chromium geometry regressions for desktop/tablet/mobile tab overflow, toolbar wrapping and mobile action availability.
+
 ## 0.4.0 - 2026-08-15
 
 ### Added

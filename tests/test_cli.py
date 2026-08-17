@@ -39,7 +39,7 @@ class CLITests(unittest.TestCase):
         with redirect_stdout(stdout):
             main(["--color","never","doctor"])
         self.assertIn("Web SQL Injector", stdout.getvalue())
-        self.assertIn("imr :: v0.4.0", stdout.getvalue())
+        self.assertIn("imr :: v0.4.1", stdout.getvalue())
 
     def test_cli_errors_are_controlled_without_traceback(self) -> None:
         stderr = io.StringIO()
